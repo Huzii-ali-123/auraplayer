@@ -1,33 +1,303 @@
 import type { Track } from '../spotify/api';
 import { songMap } from './songMap';
 
-export type SceneKey = 'snow'|'rain'|'stars'|'fireflies'|'ember'|'ocean'|'sunset'|'neon'|'blossom'|'art';
-export type Scene = { key:SceneKey; label:string; background:string; ink:string; colors:[string,string,string,string]; keywords:string[]; kind:'snow'|'rain'|'plus'|'square'|'triangle'|'wave'|'sun'|'city'|'petal'|'art'; revision?:string };
-export const scenes:Scene[]=[
- {key:'snow',label:'Snow',background:'#6FE7FF',ink:'#07121A',colors:['#6FE7FF','#F8F8F2','#FF4FA1','#07121A'],keywords:['snow','winter','frost','ice','christmas','cold'],kind:'snow'},
- {key:'rain',label:'Rain',background:'#537CF2',ink:'#080B20',colors:['#537CF2','#B9D6FF','#161A33','#FC6F58'],keywords:['rain','storm','tears','cloud','blue'],kind:'rain'},
- {key:'stars',label:'Night Stars',background:'#F3C43A',ink:'#16140C',colors:['#F3C43A','#FFF4BD','#122A4A','#EF5B43'],keywords:['night','star','moon','space','dream','midnight'],kind:'plus'},
- {key:'fireflies',label:'Fireflies',background:'#A7DB55',ink:'#10170C',colors:['#A7DB55','#F5EE9E','#1F3722','#FF6F59'],keywords:['love','garden','field','summer','wild','firefly'],kind:'square'},
- {key:'ember',label:'Embers',background:'#F05232',ink:'#1A0D0A',colors:['#F05232','#FFCB46','#24130F','#F8EFD8'],keywords:['fire','flame','burn','heat','ember','red'],kind:'triangle'},
- {key:'ocean',label:'Ocean',background:'#27B8B1',ink:'#071819',colors:['#27B8B1','#B3EEE2','#123F51','#F37F5B'],keywords:['ocean','sea','wave','water','island','beach'],kind:'wave'},
- {key:'sunset',label:'Sunset',background:'#FF815A',ink:'#1B1014',colors:['#FF815A','#FFD35B','#65284F','#F8E9C9'],keywords:['sun','sunset','dusk','daylight','golden'],kind:'sun'},
- {key:'neon',label:'Neon City',background:'#EB5BC3',ink:'#170A20',colors:['#EB5BC3','#70F1DE','#211B43','#F5E650'],keywords:['city','neon','electric','dance','nightlife','lights'],kind:'city'},
- {key:'blossom',label:'Cherry Blossom',background:'#F5A8C7',ink:'#24111B',colors:['#F5A8C7','#FFE9DA','#772B58','#F4CC48'],keywords:['cherry','blossom','flower','spring','petal','rose'],kind:'petal'},
+export type SceneKey =
+  | 'snow'
+  | 'rain'
+  | 'stars'
+  | 'fireflies'
+  | 'ember'
+  | 'ocean'
+  | 'sunset'
+  | 'neon'
+  | 'blossom'
+  | 'thunder'
+  | 'desert'
+  | 'space'
+  | 'art';
+
+export type SceneKind =
+  | 'snow'
+  | 'rain'
+  | 'plus'
+  | 'square'
+  | 'triangle'
+  | 'wave'
+  | 'sun'
+  | 'city'
+  | 'petal'
+  | 'lightning'
+  | 'heat'
+  | 'orbit'
+  | 'art';
+
+export type Scene = {
+  key: SceneKey;
+  label: string;
+  background: string;
+  ink: string;
+  colors: [string, string, string, string];
+  keywords: string[];
+  kind: SceneKind;
+  variants: [string, string, string, string];
+  motionVariant?: number; // 0, 1, 2, 3
+  motionName?: string;
+  revision?: string;
+};
+
+export const scenes: Scene[] = [
+  {
+    key: 'snow',
+    label: 'Snow',
+    background: '#6FE7FF',
+    ink: '#07121A',
+    colors: ['#6FE7FF', '#F8F8F2', '#FF4FA1', '#07121A'],
+    keywords: ['snow', 'winter', 'frost', 'ice', 'christmas', 'cold', 'freeze'],
+    kind: 'snow',
+    variants: ['GENTLE FALL', 'BLIZZARD GUST', 'FLOATING FLAKES', 'SWIRLING VORTEX']
+  },
+  {
+    key: 'rain',
+    label: 'Rain',
+    background: '#537CF2',
+    ink: '#080B20',
+    colors: ['#537CF2', '#B9D6FF', '#161A33', '#FC6F58'],
+    keywords: ['rain', 'storm', 'tears', 'cloud', 'blue', 'pour', 'drizzle'],
+    kind: 'rain',
+    variants: ['STEADY DRIZZLE', 'WIND SLANT', 'HEAVY DOWNPOUR', 'CHAOTIC SQUALL']
+  },
+  {
+    key: 'thunder',
+    label: 'Thunderstorm',
+    background: '#1A1C29',
+    ink: '#F4F5F9',
+    colors: ['#1A1C29', '#4C5BD4', '#FFE600', '#0D0E15'],
+    keywords: ['thunder', 'lightning', 'storm', 'flash', 'strike', 'dark', 'electric', 'voltage'],
+    kind: 'lightning',
+    variants: ['STROBE SQUALL', 'JAGGED VOLTS', 'RUMBLING HAIL', 'PULSE DISCHARGE']
+  },
+  {
+    key: 'stars',
+    label: 'Night Stars',
+    background: '#F3C43A',
+    ink: '#16140C',
+    colors: ['#F3C43A', '#FFF4BD', '#122A4A', '#EF5B43'],
+    keywords: ['night', 'star', 'moon', 'dream', 'midnight', 'twilight', 'sleep'],
+    kind: 'plus',
+    variants: ['STEADY TWINKLE', 'CELESTIAL DRIFT', 'METEOR SHOWER', 'PULSATING NEBULA']
+  },
+  {
+    key: 'fireflies',
+    label: 'Fireflies',
+    background: '#A7DB55',
+    ink: '#10170C',
+    colors: ['#A7DB55', '#F5EE9E', '#1F3722', '#FF6F59'],
+    keywords: ['love', 'garden', 'field', 'summer', 'wild', 'firefly', 'meadow'],
+    kind: 'square',
+    variants: ['FOREST MEANDER', 'SYNCHRONIZED SWARM', 'ZEPHYR DRIFT', 'RAPID SCATTER']
+  },
+  {
+    key: 'ember',
+    label: 'Embers',
+    background: '#F05232',
+    ink: '#1A0D0A',
+    colors: ['#F05232', '#FFCB46', '#24130F', '#F8EFD8'],
+    keywords: ['fire', 'flame', 'burn', 'heat', 'ember', 'red', 'ash', 'blaze'],
+    kind: 'triangle',
+    variants: ['BONFIRE UPRISING', 'ASHEN DRIFT', 'INFERNO SPIRAL', 'SPARK POPPING']
+  },
+  {
+    key: 'desert',
+    label: 'Desert Heat',
+    background: '#F59E0B',
+    ink: '#1C1204',
+    colors: ['#F59E0B', '#EF4444', '#78350F', '#FEF3C7'],
+    keywords: ['desert', 'heat', 'sand', 'dune', 'dry', 'mirage', 'oasis', 'sun'],
+    kind: 'heat',
+    variants: ['THERMAL WAVES', 'SHIMMERING MIRAGE', 'SIROCCO DUST', 'GOLDEN HORIZON']
+  },
+  {
+    key: 'ocean',
+    label: 'Ocean',
+    background: '#27B8B1',
+    ink: '#071819',
+    colors: ['#27B8B1', '#B3EEE2', '#123F51', '#F37F5B'],
+    keywords: ['ocean', 'sea', 'wave', 'water', 'island', 'beach', 'tide', 'deep'],
+    kind: 'wave',
+    variants: ['ROLLING SWELL', 'TIDAL SURGE', 'CHOPPY CURRENT', 'CALM SHORELINE']
+  },
+  {
+    key: 'space',
+    label: 'Deep Space',
+    background: '#0B0C1A',
+    ink: '#FFFFFF',
+    colors: ['#0B0C1A', '#8B5CF6', '#38BDF8', '#F3F4F6'],
+    keywords: ['space', 'galaxy', 'planet', 'cosmic', 'orbit', 'asteroid', 'universe', 'alien'],
+    kind: 'orbit',
+    variants: ['ASTEROID DRIFT', 'ORBITAL PRECESSION', 'WARP VECTOR', 'COSMIC CORONA']
+  },
+  {
+    key: 'sunset',
+    label: 'Sunset',
+    background: '#FF815A',
+    ink: '#1B1014',
+    colors: ['#FF815A', '#FFD35B', '#65284F', '#F8E9C9'],
+    keywords: ['sunset', 'dusk', 'daylight', 'golden', 'evening', 'sundown'],
+    kind: 'sun',
+    variants: ['GOLDEN HOUR SLOW', 'HORIZON PULSE', 'SOLAR FLARE', 'DUSK GLOW']
+  },
+  {
+    key: 'neon',
+    label: 'Neon City',
+    background: '#EB5BC3',
+    ink: '#170A20',
+    colors: ['#EB5BC3', '#70F1DE', '#211B43', '#F5E650'],
+    keywords: ['city', 'neon', 'electric', 'dance', 'nightlife', 'lights', 'cyber', 'disco', 'club'],
+    kind: 'city',
+    variants: ['CYBER GLITCH', 'METROPOLIS GRID', 'STROBE BEAT', 'SYNTH WAVE DRIFT']
+  },
+  {
+    key: 'blossom',
+    label: 'Cherry Blossom',
+    background: '#F5A8C7',
+    ink: '#24111B',
+    colors: ['#F5A8C7', '#FFE9DA', '#772B58', '#F4CC48'],
+    keywords: ['cherry', 'blossom', 'flower', 'spring', 'petal', 'rose', 'bloom', 'flora'],
+    kind: 'petal',
+    variants: ['GENTLE FLUTTER', 'SPRING BREEZE', 'PETAL WHIRLWIND', 'FALLING BLOSSOM']
+  }
 ];
-const byKey=(key:string)=>scenes.find(s=>s.key===key);
-function lighter(hex:string){const raw=hex.replace('#','');if(!/^[0-9a-f]{6}$/i.test(raw))return hex;const channels=[0,2,4].map(i=>parseInt(raw.slice(i,i+2),16));return `#${channels.map(value=>Math.round(value+(255-value)*.32).toString(16).padStart(2,'0')).join('')}`}
-function contrastingInk(hex:string,fallback:string){const raw=hex.replace('#','');if(!/^[0-9a-f]{6}$/i.test(raw))return fallback;const [r,g,b]=[0,2,4].map(i=>parseInt(raw.slice(i,i+2),16));return (r*.299+g*.587+b*.114)<142?'#fff9e8':fallback}
-function forTrack(scene:Scene,track:Track,dominant?:[string,string,string]):Scene{let hash=0;for(const char of track.id)hash=(hash*31+char.charCodeAt(0))>>>0;const fallback=`hsl(${hash%360} 82% 70%)`;const background=dominant?lighter(dominant[0]):fallback;const ink=dominant?contrastingInk(background,scene.ink):scene.ink;return {...scene,background,ink,colors:[background,dominant?.[0]||scene.colors[1],dominant?.[1]||scene.colors[2],ink],revision:track.id}}
-export function resolveScene(track:Track|null,genres:string[]=[],dominant?:[string,string,string]):Scene {
- if(!track)return byKey('stars')!;
- const mapped=songMap[track.id]; if(mapped&&byKey(mapped))return byKey(mapped)!;
- const text=`${track.name} ${track.album.name} ${track.artists.map(a=>a.name).join(' ')}`.toLowerCase();
- for(const scene of scenes)if(scene.keywords.some(word=>text.includes(word)))return forTrack(scene,track,dominant);
- const genre=genres.join(' ').toLowerCase();
- if(/metal|rock|punk|hardcore/.test(genre))return forTrack(byKey('ember')!,track,dominant);
- if(/electronic|dance|edm|pop/.test(genre))return forTrack(byKey('neon')!,track,dominant);
- if(/ambient|classical|folk|acoustic/.test(genre))return forTrack(byKey('snow')!,track,dominant);
- if(/reggae|tropical|soul/.test(genre))return forTrack(byKey('ocean')!,track,dominant);
- const colors=dominant||['#ED704F','#F3C43A','#253B58'];
- return {key:'art',label:'Album colors',background:lighter(colors[0]),ink:contrastingInk(lighter(colors[0]),'#111111'),colors:[lighter(colors[0]),colors[1],colors[2],'#111111'],keywords:[],kind:'art',revision:track.id};
+
+export const byKey = (key: string): Scene | undefined => scenes.find(s => s.key === key);
+
+export function hashTrackId(id: string = ''): number {
+  let hash = 0;
+  const str = String(id || '');
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function lighter(hex: string): string {
+  const raw = String(hex || '').replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return hex || '#F3C43A';
+  const channels = [0, 2, 4].map(i => parseInt(raw.slice(i, i + 2), 16));
+  return `#${channels
+    .map(value => Math.round(value + (255 - value) * 0.32).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+function contrastingInk(hex: string, fallback: string): string {
+  const raw = String(hex || '').replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(raw)) return fallback || '#111111';
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(raw.slice(i, i + 2), 16));
+  return r * 0.299 + g * 0.587 + b * 0.114 < 142 ? '#fff9e8' : fallback;
+}
+
+function forTrack(scene: Scene, track: Track, dominant?: [string, string, string]): Scene {
+  const trackId = track?.id || 'default_track_id';
+  const hash = hashTrackId(trackId);
+  const variantIndex = hash % 4;
+  const fallback = `hsl(${hash % 360} 82% 70%)`;
+  const dominantColor = dominant?.[0];
+  const background = dominantColor ? lighter(dominantColor) : fallback;
+  const ink = dominantColor ? contrastingInk(background, scene.ink) : scene.ink;
+
+  const col0 = background;
+  const col1 = dominant?.[0] || scene.colors[1] || '#F3C43A';
+  const col2 = dominant?.[1] || scene.colors[2] || '#253B58';
+  const col3 = ink;
+
+  return {
+    ...scene,
+    background,
+    ink,
+    colors: [col0, col1, col2, col3],
+    motionVariant: variantIndex,
+    motionName: scene.variants?.[variantIndex] || scene.variants[0],
+    revision: trackId
+  };
+}
+
+export function resolveScene(
+  track: Track | null,
+  genres: string[] = [],
+  dominant?: [string, string, string],
+  lyricText?: string
+): Scene {
+  if (!track) return byKey('stars')!;
+
+  const trackId = track.id || '';
+
+  // 1. Curated map
+  if (trackId) {
+    const mapped = songMap[trackId];
+    if (mapped && byKey(mapped)) {
+      return forTrack(byKey(mapped)!, track, dominant);
+    }
+  }
+
+  // 2. Lyric keywords
+  if (lyricText) {
+    const lowerLyrics = lyricText.toLowerCase();
+    for (const scene of scenes) {
+      if (scene.keywords.some(word => lowerLyrics.includes(word))) {
+        return forTrack(scene, track, dominant);
+      }
+    }
+  }
+
+  // 3. Title, album, artist keywords (Safe optional chaining)
+  const trackName = track.name || '';
+  const albumName = track.album?.name || '';
+  const artistNames = Array.isArray(track.artists)
+    ? track.artists.map(a => a?.name || '').join(' ')
+    : '';
+  const text = `${trackName} ${albumName} ${artistNames}`.toLowerCase();
+
+  for (const scene of scenes) {
+    if (scene.keywords.some(word => text.includes(word))) {
+      return forTrack(scene, track, dominant);
+    }
+  }
+
+  // 4. Artist genre
+  const genre = Array.isArray(genres) ? genres.join(' ').toLowerCase() : '';
+  if (/metal|rock|punk|hardcore/.test(genre)) return forTrack(byKey('ember')!, track, dominant);
+  if (/electronic|dance|edm|techno|synth/.test(genre)) return forTrack(byKey('neon')!, track, dominant);
+  if (/ambient|classical|folk|acoustic|chill/.test(genre)) return forTrack(byKey('snow')!, track, dominant);
+  if (/reggae|tropical|soul|surf/.test(genre)) return forTrack(byKey('ocean')!, track, dominant);
+  if (/hip hop|rap|trap|r&b/.test(genre)) return forTrack(byKey('thunder')!, track, dominant);
+  if (/psychedelic|space|prog/.test(genre)) return forTrack(byKey('space')!, track, dominant);
+  if (/latin|flamenco|afro/.test(genre)) return forTrack(byKey('desert')!, track, dominant);
+
+  // 5. Album-art dominant colors fallback
+  const colors = dominant || ['#ED704F', '#F3C43A', '#253B58'];
+  const hash = hashTrackId(trackId);
+  const variantIndex = hash % 4;
+  const artVariants: [string, string, string, string] = [
+    'SPECTRUM DRIFT',
+    'GEOMETRIC CASCADE',
+    'COLOR RAIN',
+    'ABSTRACT PULSE'
+  ];
+
+  const c0 = colors[0] || '#ED704F';
+  const c1 = colors[1] || '#F3C43A';
+  const c2 = colors[2] || '#253B58';
+
+  return {
+    key: 'art',
+    label: 'Album colors',
+    background: lighter(c0),
+    ink: contrastingInk(lighter(c0), '#111111'),
+    colors: [lighter(c0), c1, c2, '#111111'],
+    keywords: [],
+    kind: 'art',
+    variants: artVariants,
+    motionVariant: variantIndex,
+    motionName: artVariants[variantIndex],
+    revision: trackId
+  };
 }
