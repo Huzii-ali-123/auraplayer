@@ -83,11 +83,29 @@ playlist-read-private
 
 Spotify development-mode apps may restrict sign-in to users explicitly added in the Developer Dashboard's user management settings. Add the Spotify account you use to test the app if Spotify reports that the account is not allowed.
 
+## Deploy to Vercel
+
+The repository's `.env` is for local development only. For the deployed site, add environment variables in **Vercel → Project → Settings → Environment Variables**:
+
+```dotenv
+VITE_SPOTIFY_CLIENT_ID=your_spotify_client_id
+VITE_SPOTIFY_REDIRECT_URI=https://your-project.vercel.app/callback
+```
+
+For this deployment, the redirect value should be:
+
+```text
+https://auraplayer-one.vercel.app/callback
+```
+
+In Spotify Developer Dashboard, register both the local URI (`http://127.0.0.1:5173/callback`) and the deployed URI (`https://auraplayer-one.vercel.app/callback`). They must exactly match their respective local and Vercel environment values. Select Production (and Preview if needed) for the Vercel variables, then redeploy so Vite rebuilds with them. Never replace your local `.env` callback with the Vercel URL; keep the local and hosted origins separate.
+
 ## Troubleshooting Spotify login and playback
 
 - **Connection refused on the callback:** make sure `npm run dev` is still running and open `http://127.0.0.1:5173/`. Do not start sign-in from `localhost` or another port.
 - **Port 5173 is busy:** stop the other Vite process, then run `npm run dev` again. `strictPort` is enabled by design; the app needs the registered callback port.
-- **Redirect URI mismatch:** compare the Spotify Dashboard value and `.env` character-for-character. Both must be `http://127.0.0.1:5173/callback`.
+- **Redirect URI mismatch locally:** compare the Spotify Dashboard value and local `.env` character-for-character; both must be `http://127.0.0.1:5173/callback`.
+- **Redirect URI mismatch on Vercel:** set `VITE_SPOTIFY_REDIRECT_URI` in Vercel to `https://your-project.vercel.app/callback`, register that exact URL in Spotify, then redeploy.
 - **Verifier missing or state mismatch:** return to `http://127.0.0.1:5173/` and start a fresh sign-in. Do not start the flow on one hostname and finish it on another.
 - **Premium or playback error:** browser playback through the Spotify Web Playback SDK requires Spotify Premium and a supported browser. Approve the Spotify prompt, return to AuraPlayer, and use **CLICK TO START** if prompted.
 - **Account not permitted:** in Spotify's development mode, make sure your testing account is included in the app's allowed users.

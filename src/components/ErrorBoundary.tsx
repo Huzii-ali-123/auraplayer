@@ -34,7 +34,7 @@ export class ErrorBoundary extends Component<Props, State> {
         sessionStorage.removeItem(key);
       }
     } catch {}
-    window.location.href = 'http://127.0.0.1:5173/';
+    window.location.href = `${window.location.origin}/`;
   };
 
   private handleReload = () => {

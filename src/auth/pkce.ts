@@ -13,6 +13,7 @@ const VERIFIER_KEY = 'spotify_verifier';
 const STATE_KEY = 'spotify_oauth_state';
 const REDIRECT_KEY = 'spotify_redirect_uri';
 const CANONICAL_REDIRECT = 'http://127.0.0.1:5173/callback';
+const CALLBACK_PATH = '/callback';
 
 export type AuthData = {
   access_token: string;
@@ -31,8 +32,8 @@ type TokenResponse = {
 
 export const config = () => ({
   clientId: (import.meta.env.VITE_SPOTIFY_CLIENT_ID as string) || '',
-  redirect:
-    (import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string) || CANONICAL_REDIRECT
+  redirect: (import.meta.env.VITE_SPOTIFY_REDIRECT_URI as string) ||
+    (import.meta.env.DEV ? CANONICAL_REDIRECT : `${window.location.origin}${CALLBACK_PATH}`)
 });
 
 function storeValue(key: string, value: string) {
@@ -103,15 +104,23 @@ async function challenge(verifier: string) {
 
 export async function login() {
   const { clientId, redirect } = config();
-  if (!clientId) throw new Error('Set VITE_SPOTIFY_CLIENT_ID in .env, then restart Vite.');
-  if (redirect !== CANONICAL_REDIRECT) {
-    throw new Error(`Set VITE_SPOTIFY_REDIRECT_URI to exactly ${CANONICAL_REDIRECT}, then restart Vite.`);
+  if (!clientId) throw new Error('Set VITE_SPOTIFY_CLIENT_ID in your local .env or Vercel Environment Variables.');
+  let redirectUrl: URL;
+  try { redirectUrl = new URL(redirect); }
+  catch { throw new Error('VITE_SPOTIFY_REDIRECT_URI must be a valid absolute URL ending in /callback.'); }
+  if (redirectUrl.pathname !== CALLBACK_PATH || redirectUrl.search || redirectUrl.hash) {
+    throw new Error('VITE_SPOTIFY_REDIRECT_URI must be the exact callback URL ending in /callback.');
   }
-  if (window.location.origin !== 'http://127.0.0.1:5173') {
-    window.location.replace(`http://127.0.0.1:5173${window.location.pathname}${window.location.search}${window.location.hash}`);
-    return;
+  if (window.location.origin !== redirectUrl.origin) {
+    if (import.meta.env.DEV && redirectUrl.origin === new URL(CANONICAL_REDIRECT).origin) {
+      window.location.replace(`${redirectUrl.origin}${window.location.pathname}${window.location.search}${window.location.hash}`);
+      return;
+    }
+    throw new Error(`Set VITE_SPOTIFY_REDIRECT_URI to ${window.location.origin}${CALLBACK_PATH} in your Vercel Environment Variables, then redeploy.`);
   }
-
+  if (window.location.pathname === CALLBACK_PATH) {
+    throw new Error('Open AuraPlayer home before connecting Spotify, then try again.');
+  }
   const verifier = randomBase64Url(64);
   const state = randomBase64Url(32);
   try {
@@ -167,7 +176,7 @@ export function handleCallback(): Promise<CallbackResult> {
   if (!verifier) {
     exchangePromise = Promise.resolve({
       success: false,
-      error: 'The Spotify sign-in verifier is missing. Open AuraPlayer at http://127.0.0.1:5173/ and try again.'
+      error: 'The Spotify sign-in verifier is missing. Open AuraPlayer at its home page and try again.'
     });
     return exchangePromise;
   }
@@ -179,11 +188,13 @@ export function handleCallback(): Promise<CallbackResult> {
     });
     return exchangePromise;
   }
-  if (!clientId || !savedRedirect || savedRedirect !== redirect || redirect !== CANONICAL_REDIRECT) {
+  let redirectUrl: URL | null = null;
+  try { redirectUrl = new URL(redirect); } catch { /* handled as mismatch below */ }
+  if (!clientId || !savedRedirect || savedRedirect !== redirect || !redirectUrl || redirectUrl.pathname !== CALLBACK_PATH || window.location.origin !== redirectUrl.origin) {
     clearPendingAuth();
     exchangePromise = Promise.resolve({
       success: false,
-      error: `The Spotify redirect URI changed during sign-in. Set it to exactly ${CANONICAL_REDIRECT} and try again.`
+      error: 'The Spotify redirect URI changed during sign-in. Check that VITE_SPOTIFY_REDIRECT_URI matches this site and try again.'
     });
     return exchangePromise;
   }
