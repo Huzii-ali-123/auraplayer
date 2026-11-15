@@ -18,6 +18,9 @@ import type { Playback, Track } from './spotify/api';
 import { usePlayer } from './store/player';
 import { resolveScene, scenes } from './scenes/scenes';
 import type { Scene } from './scenes/scenes';
+import { buildPalette } from './color/palette';
+import { extractAlbumColors } from './color/extract';
+import { ContrastDebugOverlay } from './components/ContrastDebugOverlay';
 import { SceneCanvas } from './components/SceneCanvas';
 import { WipeTransition } from './components/WipeTransition';
 import { WheelPlayer } from './components/WheelPlayer';
@@ -52,55 +55,6 @@ const emptyProgress = (): ProgressState => ({
   updatedAt: performance.now(),
   playing: false
 });
-
-function sampleColors(url: string): Promise<[string, string, string]> {
-  return new Promise(resolve => {
-    const fallback: [string, string, string] = ['#ED704F', '#F3C43A', '#253B58'];
-    if (!url) return resolve(fallback);
-
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const c = document.createElement('canvas');
-        const ctx = c.getContext('2d', { willReadFrequently: true });
-        if (!ctx) throw Error();
-        c.width = 28;
-        c.height = 28;
-        ctx.drawImage(img, 0, 0, 28, 28);
-        const data = ctx.getImageData(0, 0, 28, 28).data;
-        const bins = new Map<string, { n: number; r: number; g: number; b: number }>();
-        for (let i = 0; i < data.length; i += 16) {
-          const r = data[i],
-            g = data[i + 1],
-            b = data[i + 2];
-          if (data[i + 3] < 150) continue;
-          const key = `${Math.round(r / 32)},${Math.round(g / 32)},${Math.round(b / 32)}`;
-          const v = bins.get(key) || { n: 0, r: 0, g: 0, b: 0 };
-          v.n++;
-          v.r += r;
-          v.g += g;
-          v.b += b;
-          bins.set(key, v);
-        }
-        const top = [...bins.values()]
-          .sort((a, b) => b.n - a.n)
-          .slice(0, 3)
-          .map(
-            v =>
-              `#${[v.r / v.n, v.g / v.n, v.b / v.n]
-                .map(x => Math.round(x).toString(16).padStart(2, '0'))
-                .join('')}`
-          );
-        resolve([top[0] || fallback[0], top[1] || fallback[1], top[2] || fallback[2]]);
-      } catch {
-        resolve(fallback);
-      }
-    };
-    img.onerror = () => resolve(fallback);
-    img.src = url;
-  });
-}
 
 function TrackStamp({ track }: { track: Track | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
@@ -137,6 +91,10 @@ export default function App() {
   const [volume, setVolume] = useState(68);
   const [shuffle, setShuffle] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [startDismissed, setStartDismissed] = useState(() => {
+    try { return sessionStorage.getItem('auraplayer_start_dismissed') === '1'; }
+    catch { return false; }
+  });
   const [searchOpen, setSearchOpen] = useState(false);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -146,23 +104,55 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Track[]>([]);
   const [genres, setGenres] = useState<string[]>([]);
-  const [dominant, setDominant] = useState<[string, string, string]>();
+  const [dominant, setDominant] = useState<{ trackId: string; colors: [string, string, string] } | null>(null);
   const [lyrics, setLyrics] = useState<LyricsRecord | null>(null);
   const [notice, setNotice] = useState('');
   const [visibleScene, setVisibleScene] = useState<Scene>(scenes[3]); // Night Stars default
+  const shellRef = useRef<HTMLElement>(null);
+  const initialPalette = useMemo(() => buildPalette(undefined, {
+    bg: scenes[3].background,
+    surface: scenes[3].colors[1],
+    accent: scenes[3].colors[2],
+    accent2: scenes[3].colors[3]
+  }), []);
   const noticeTimer = useRef<number>();
 
   activeTrackId.current = track?.id || '';
 
   // Scene choice resolution with safe fallback
   const lyricsText = lyrics?.plainLyrics || lyrics?.syncedLyrics || '';
+  const albumColors = dominant && dominant.trackId === track?.id ? dominant.colors : undefined;
   const targetScene = useMemo(() => {
     try {
-      return resolveScene(track, genres, dominant, lyricsText);
+      return resolveScene(track, genres, albumColors, lyricsText);
     } catch {
       return scenes[3];
     }
-  }, [track, genres, dominant, lyricsText]);
+  }, [track, genres, albumColors, lyricsText]);
+
+  const applyScene = useCallback((scene: Scene) => {
+    setVisibleScene(scene);
+    const palette = scene.palette || buildPalette(undefined, {
+      bg: scene.background, surface: scene.colors[1], accent: scene.colors[2], accent2: scene.colors[3]
+    });
+    const shell = shellRef.current;
+    if (!shell) return;
+    gsap.to(shell, {
+      '--bg': palette.bg,
+      '--surface': palette.surface,
+      '--accent': palette.accent,
+      '--accent-2': palette.accent2,
+      '--ink': palette.ink,
+      '--paper': palette.paper,
+      '--on-bg': palette.onBg,
+      '--on-surface': palette.onSurface,
+      '--on-accent': palette.onAccent,
+      '--on-accent-alt': palette.onAccentAlt,
+      duration: 0.8,
+      ease: 'power2.inOut',
+      overwrite: true
+    });
+  }, []);
 
   const announce = useCallback(
     (error: unknown) => {
@@ -366,12 +356,15 @@ export default function App() {
 
   // Safe dominant color sampling
   useEffect(() => {
-    setDominant(undefined);
+    setDominant(null);
     const url = track?.album?.images?.[0]?.url;
     if (!url) return;
     let stale = false;
-    void sampleColors(url).then(colors => {
-      if (!stale && colors) setDominant(colors);
+    void extractAlbumColors(track?.id || url, url).then(colors => {
+      if (!stale && colors.length) setDominant({
+        trackId: track?.id || url,
+        colors: [colors[0] || '', colors[1] || '', colors[2] || '']
+      });
     });
     return () => {
       stale = true;
@@ -383,7 +376,9 @@ export default function App() {
     setLyrics(null);
     if (!track?.name) return;
     const controller = new AbortController();
-    void fetchLyrics(track, controller.signal).then(setLyrics).catch(() => {});
+    void fetchLyrics(track, controller.signal).then(result => {
+      if (!controller.signal.aborted) setLyrics(result);
+    }).catch(() => {});
     return () => controller.abort();
   }, [track?.id]);
 
@@ -696,21 +691,26 @@ export default function App() {
 
   return (
     <main
-      className="app-shell"
+      ref={shellRef}
+      className={`app-shell ${expanded ? 'is-player-expanded' : ''}`}
       style={
         {
-          '--scene-bg': visibleScene.background,
-          '--ink': visibleScene.ink,
-          '--accent': visibleScene.colors[2] || '#FF4FA1',
-          '--palette-1': visibleScene.colors[0],
-          '--palette-2': visibleScene.colors[1],
-          '--palette-3': visibleScene.colors[2]
+          '--bg': initialPalette.bg,
+          '--surface': initialPalette.surface,
+          '--accent': initialPalette.accent,
+          '--accent-2': initialPalette.accent2,
+          '--ink': initialPalette.ink,
+          '--paper': initialPalette.paper,
+          '--on-bg': initialPalette.onBg,
+          '--on-surface': initialPalette.onSurface,
+          '--on-accent': initialPalette.onAccent,
+          '--on-accent-alt': initialPalette.onAccentAlt
         } as React.CSSProperties
       }
     >
       {/* Background persistent canvas scene */}
       <SceneCanvas scene={visibleScene} playing={playing} />
-      <WipeTransition scene={targetScene} onSwap={setVisibleScene} />
+      <WipeTransition scene={targetScene} onSwap={applyScene} />
       <div className="grid-veil" aria-hidden="true" />
 
       {/* Top Masthead */}
@@ -764,10 +764,10 @@ export default function App() {
         <TrackStamp track={track} />
 
         <HeroLyrics
+          trackId={track?.id}
           lyrics={lyrics}
           progressRef={progressRef}
           onSeek={fraction => void seek(fraction)}
-          accentColor={visibleScene.colors[2] || '#FF4FA1'}
         />
 
         <div className="hero-lower">
@@ -851,6 +851,7 @@ export default function App() {
         onClose={() => setExpanded(false)}
         onNotice={msg => setNotice(msg)}
       />
+      <ContrastDebugOverlay />
 
       {/* Dedicated UP NEXT Queue Dock */}
       <UpNextQueue
@@ -861,7 +862,6 @@ export default function App() {
         onToggleAutoplay={toggleAutoplay}
         onClearQueue={clearQueue}
         onPlayTrack={item => void playTrack(item)}
-        scene={visibleScene}
       />
 
       {!token && (
@@ -873,10 +873,16 @@ export default function App() {
         </div>
       )}
 
-      {token && device && !playing && (
-        <button className="start-overlay" onClick={() => void toggle()}>
-          <span>▶</span> CLICK TO START
-        </button>
+      {token && device && !playing && !startDismissed && (
+        <div className="start-overlay-backdrop" role="dialog" aria-modal="true" aria-label="Start Spotify playback">
+          <button className="start-overlay" onClick={() => {
+            setStartDismissed(true);
+            try { sessionStorage.setItem('auraplayer_start_dismissed', '1'); } catch { /* storage may be unavailable */ }
+            void toggle();
+          }}>
+            <span>▶</span> CLICK TO START
+          </button>
+        </div>
       )}
 
       {notice && (

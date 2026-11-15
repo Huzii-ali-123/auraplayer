@@ -560,13 +560,6 @@ function WheelPlayerView({
   return (
     <div
       className={`wheel-dock ${expanded ? 'expanded' : ''}`}
-      style={
-        {
-          '--accent': scene.colors[0],
-          '--accent2': scene.colors[1],
-          '--ink': scene.ink
-        } as React.CSSProperties
-      }
     >
       {/* Requirement 3: Radiating 64-bar circular wave visualizer */}
       <canvas ref={waveCanvas} className="wheel-wave-canvas" aria-hidden="true" />

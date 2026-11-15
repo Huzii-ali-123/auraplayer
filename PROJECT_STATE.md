@@ -1,8 +1,8 @@
 # AURA//PLAYER — Codebase Audit & Project State
 
-**Updated:** 2026-11-14
+**Updated:** 2026-11-15
 **Author:** Antigravity
-**Status:** Hero Lyrics Migration, Readable UP NEXT Dock, Music-Reactive Procedural Visualizer, and Explicit Live Sync Complete.
+**Status:** Song-Based Contrast Palette, Animated Hero Lyrics, Readable UP NEXT Dock, Music-Reactive Procedural Visualizer, and Explicit Live Sync Complete.
 
 > **Local development URL:** Always open `http://127.0.0.1:5173/`, never `localhost`. Vite binds this exact IPv4 host and port; the entry page redirects `localhost:5173` to the canonical origin before auth starts.
 
@@ -20,12 +20,13 @@
 
 | Subsystem | Status | Details |
 | :--- | :--- | :--- |
-| **Hero Synced Lyrics** | **Completed** | Lyrics moved out of the wheel player into the main page hero directly under the song title. Features 4-line kinetic view (1 previous, 1 large active line in scene accent color, 2 upcoming lines), GSAP slide-up transition without layout thrashing, tap-to-seek, SHOW/HIDE toggle with `localStorage` persistence and `L` keyboard shortcut, and "NO LYRICS FOUND" sticker badge fallback. Never overlaps album cover art, wheel, or queue. |
+| **Hero Synced Lyrics** | **Completed** | LRCLIB lines scroll as one GSAP-translated column under the title, with a moving highlight bar, direct tap-to-seek, progress fill, pause-aware ticking, SHOW/HIDE persistence and `L` shortcut. Plain lyrics stay static. Never overlaps album art, wheel, or queue. |
 | **Readable UP NEXT Queue** | **Completed** | Dedicated right-docked panel (desktop) / bottom sheet (mobile). Features a prominent spotlight "NEXT" card on top, followed by a scrollable list of rows (min 66px high) with album thumbnails, titles, artists, durations, position numbers, clear `AUTOPLAY` badges, click-to-play, and a `CLEAR` queue button. |
 | **Music-Reactive Visualizer** | **Completed** | 5 deterministic visualizer styles chosen from track ID hash (`radial bars`, `spike ring`, `pulsing concentric rings`, `dotted orbit`, `zigzag wave`). Energy modulated by lyric line start pulses, words-per-second intensity, chorus repetition detection boost ($1.45\times$), instrumental gap calming ($0.45\times$), and position intro/outro envelopes. Seamless fallback to multi-layer noise if lyrics are absent. |
 | **Live Sync Explanations** | **Completed** | Pre-prompt modal instruction card outlining the 3 Chrome dialog steps. Distinct classification and user alerts for no-audio-track (checkbox unchecked), DRM silence, user cancellation, or unsupported browser, cleanly falling back to procedural WAVE. |
 | **Persistent 60fps Particles** | **Completed** | Single-pass canvas loop, particle pool in a ref, GSAP `timeScale` tweening (0 on pause, 1 on play), zero resets or respawns on pause/resume, 12 scene themes with 4 motion variants each. |
 | **Auth & Crash Resilience** | **Completed** | PKCE StrictMode duplicate-exchange guard, immediate URL code stripping, 401 refresh loop prevention, 403 user-whitelisting alert, 429 Retry-After backoff, top-level brutalist Error Boundary, and safe-access guards across all track/album/artist/playlist metadata. |
+| **Song Color & Contrast System** | **Completed** | A cached 48×48 album-art sampler feeds a normalized flat palette. Scene motion stays independent. Palette text roles use WCAG contrast calculations and tween behind the scene wipe. Development contrast report: press `D`. |
 
 ---
 
@@ -39,10 +40,14 @@ music-player/
 ├── package.json                 # Dependencies
 ├── vite.config.ts               # Bundler config
 ├── PROJECT_STATE.md             # This document
-└── src/
+├── src/
     ├── main.tsx                 # App mount, ErrorBoundary wrapper & GSAP 60fps cap
     ├── App.tsx                  # Main layout orchestrator & hero integration
     ├── styles.css               # Neo-brutalist stylesheets & mobile bottom sheets
+    ├── color/
+    │   ├── contrast.ts          # sRGB luminance, WCAG ratios & readable foreground selection
+    │   ├── extract.ts           # Cached 48×48 album-art color quantizer
+    │   └── palette.ts           # Song palette builder and color separation constraints
     ├── vite-env.d.ts            # Type definitions
     ├── auth/
     │   └── pkce.ts              # Single-exchange PKCE auth, token refresher & error recovery
@@ -62,15 +67,38 @@ music-player/
     │   └── player.ts            # Zustand store
     └── components/
         ├── ErrorBoundary.tsx    # Neo-brutalist top-level crash screen with reset & retry
+        ├── ContrastDebugOverlay.tsx # Dev contrast report (shortcut: D)
         ├── SceneCanvas.tsx      # Persistent 60fps canvas renderer (freeze/resume without reset)
         ├── UpNextQueue.tsx      # Dedicated right-docked UP NEXT queue panel
         ├── WheelPlayer.tsx      # SVG wheel, 5-style visualizer, Live Sync pre-prompt
         └── WipeTransition.tsx   # GSAP horizontal scene wipe transition
+└── tests/
+    └── color.test.mjs           # Contrast utility, 20-color and scene-fallback regression tests
 ```
 
 ---
 
-## 3. How Chorus Detection & Lyric-Driven Energy Work
+## 3. Album-Art Palette & Contrast Pipeline
+
+1. On each track change, `extractAlbumColors` draws album art to a 48×48 offscreen canvas with `crossOrigin="anonymous"`. A small RGB bucket quantizer ignores transparent, near-black, near-white, and low-saturation pixels, then favors saturated buckets. The extraction promise is cached by Spotify track ID. If CORS or image decoding fails, the scene palette supplies the color seeds.
+2. `resolveScene` still chooses the particle kind, scene label, and motion. Its palette builder combines the art colors with the selected scene's preset colors; `songPaletteMap` in `src/scenes/songMap.ts` adds an optional per-track palette override alongside the existing one-line scene mapping.
+3. `buildPalette` returns flat `bg`, `surface`, `accent`, `accent2`, `ink`, and `paper` colors. `--on-bg`, `--on-surface`, and `--on-accent` come from `pickReadable` in `src/color/contrast.ts`. Backgrounds are nudged until one of ink or paper meets 4.5:1, with the black outline reaching at least 3:1. Page, surface, and accent colors stay distinct.
+4. `WipeTransition` covers the page while GSAP tweens palette CSS variables for 0.8 seconds, then reveals the new scene. Text roles and their matching opaque plates change while the page is covered; particles keep using the selected scene's motion and remain behind the UI.
+5. Main title, artist, lyric lines, wheel labels, queue rows, and panel controls use opaque surface/accent plates and the corresponding `on-*` foreground role. In development, press `D` for a contrast report; pairs below 4.5:1 are flagged.
+
+Run `npm test` for the contrast utility checks, the 20-color suite (including pure yellow, white, black, gray, cyan, hot pink, and navy), and the 12-scene fallback/curated palette checks.
+
+### Files changed for the palette pass
+
+- `src/color/contrast.ts`, `src/color/extract.ts`, `src/color/palette.ts`
+- `src/scenes/scenes.ts`, `src/scenes/songMap.ts`
+- `src/App.tsx`, `src/components/WipeTransition.tsx`, `src/components/ContrastDebugOverlay.tsx`
+- `src/components/WheelPlayer.tsx`, `src/components/UpNextQueue.tsx`, `src/lyrics/HeroLyrics.tsx`, `src/styles.css`
+- `tests/color.test.mjs`, `package.json`, and this document
+
+---
+
+## 4. How Chorus Detection & Lyric-Driven Energy Work
 
 1. **Chorus & Hook Detection:**
    During LRC parsing (`parseLrc` in `client.ts`), each line text is normalized (`toLowerCase().replace(/[^\w\s]/g, '').trim()`). A frequency map calculates how many times each phrase repeats across the track. Lines repeating $\ge 2$ times (with length $> 5$ chars) are identified as **CHORUS / HOOK** lines (`isChorus = true`).
@@ -91,7 +119,7 @@ music-player/
 
 ---
 
-## 4. Spotify Auth & Crash Resilience Architecture
+## 5. Spotify Auth & Crash Resilience Architecture
 
 1. **Strict-Mode Safe PKCE Code Exchange (`src/auth/pkce.ts`):**
    - Implements a single-flight promise singleton (`exchangePromise`) so that all concurrent caller instances (such as React 18 `StrictMode` unmount/remount cycles) await the exact same in-flight token exchange promise rather than failing prematurely with empty tokens.

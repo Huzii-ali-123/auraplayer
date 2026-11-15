@@ -2,7 +2,6 @@ import { memo } from 'react';
 import { ListMusic, Play, Trash2, X } from 'lucide-react';
 import type { Track } from '../spotify/api';
 import type { QueuedTrack } from '../autoplay/autoplay';
-import type { Scene } from '../scenes/scenes';
 
 type Props = {
   open: boolean;
@@ -12,7 +11,6 @@ type Props = {
   onToggleAutoplay: () => void;
   onClearQueue: () => void;
   onPlayTrack: (track: Track) => void;
-  scene: Scene;
 };
 
 const fmt = (ms: number) =>
@@ -25,8 +23,7 @@ function UpNextQueueView({
   autoplayEnabled,
   onToggleAutoplay,
   onClearQueue,
-  onPlayTrack,
-  scene
+  onPlayTrack
 }: Props) {
   const nextTrack = queue[0];
   const upcomingTracks = queue.slice(1);
@@ -34,13 +31,6 @@ function UpNextQueueView({
   return (
     <aside
       className={`upnext-dock ${open ? 'is-open' : ''}`}
-      style={
-        {
-          '--accent': scene.colors[0],
-          '--accent2': scene.colors[1],
-          '--ink': scene.ink
-        } as React.CSSProperties
-      }
       aria-label="Upcoming tracks queue"
       aria-hidden={!open}
     >

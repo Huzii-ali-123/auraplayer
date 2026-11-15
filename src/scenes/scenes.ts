@@ -1,5 +1,7 @@
 import type { Track } from '../spotify/api';
-import { songMap } from './songMap';
+import { buildPalette } from '../color/palette';
+import type { Palette } from '../color/palette';
+import { songMap, songPaletteMap } from './songMap';
 
 export type SceneKey =
   | 'snow'
@@ -43,6 +45,7 @@ export type Scene = {
   motionVariant?: number; // 0, 1, 2, 3
   motionName?: string;
   revision?: string;
+  palette?: Palette;
 };
 
 export const scenes: Scene[] = [
@@ -179,41 +182,23 @@ export function hashTrackId(id: string = ''): number {
   return hash;
 }
 
-function lighter(hex: string): string {
-  const raw = String(hex || '').replace('#', '');
-  if (!/^[0-9a-f]{6}$/i.test(raw)) return hex || '#F3C43A';
-  const channels = [0, 2, 4].map(i => parseInt(raw.slice(i, i + 2), 16));
-  return `#${channels
-    .map(value => Math.round(value + (255 - value) * 0.32).toString(16).padStart(2, '0'))
-    .join('')}`;
-}
-
-function contrastingInk(hex: string, fallback: string): string {
-  const raw = String(hex || '').replace('#', '');
-  if (!/^[0-9a-f]{6}$/i.test(raw)) return fallback || '#111111';
-  const [r, g, b] = [0, 2, 4].map(i => parseInt(raw.slice(i, i + 2), 16));
-  return r * 0.299 + g * 0.587 + b * 0.114 < 142 ? '#fff9e8' : fallback;
-}
-
 function forTrack(scene: Scene, track: Track, dominant?: [string, string, string]): Scene {
   const trackId = track?.id || 'default_track_id';
   const hash = hashTrackId(trackId);
   const variantIndex = hash % 4;
-  const fallback = `hsl(${hash % 360} 82% 70%)`;
-  const dominantColor = dominant?.[0];
-  const background = dominantColor ? lighter(dominantColor) : fallback;
-  const ink = dominantColor ? contrastingInk(background, scene.ink) : scene.ink;
-
-  const col0 = background;
-  const col1 = dominant?.[0] || scene.colors[1] || '#F3C43A';
-  const col2 = dominant?.[1] || scene.colors[2] || '#253B58';
-  const col3 = ink;
+  const palette = buildPalette(dominant, {
+    bg: scene.background,
+    surface: scene.colors[1],
+    accent: scene.colors[2],
+    accent2: scene.colors[3]
+  }, songPaletteMap[trackId]);
 
   return {
     ...scene,
-    background,
-    ink,
-    colors: [col0, col1, col2, col3],
+    background: palette.bg,
+    ink: palette.onBg,
+    colors: [palette.bg, palette.surface, palette.accent, palette.accent2],
+    palette,
     motionVariant: variantIndex,
     motionName: scene.variants?.[variantIndex] || scene.variants[0],
     revision: trackId
@@ -273,7 +258,7 @@ export function resolveScene(
   if (/latin|flamenco|afro/.test(genre)) return forTrack(byKey('desert')!, track, dominant);
 
   // 5. Album-art dominant colors fallback
-  const colors = dominant || ['#ED704F', '#F3C43A', '#253B58'];
+  const colors = dominant || [];
   const hash = hashTrackId(trackId);
   const variantIndex = hash % 4;
   const artVariants: [string, string, string, string] = [
@@ -283,16 +268,17 @@ export function resolveScene(
     'ABSTRACT PULSE'
   ];
 
-  const c0 = colors[0] || '#ED704F';
-  const c1 = colors[1] || '#F3C43A';
-  const c2 = colors[2] || '#253B58';
+  const palette = buildPalette(colors, {
+    bg: '#ED704F', surface: '#F6F0DD', accent: '#253B58', accent2: '#F3C43A'
+  }, songPaletteMap[trackId]);
 
   return {
     key: 'art',
     label: 'Album colors',
-    background: lighter(c0),
-    ink: contrastingInk(lighter(c0), '#111111'),
-    colors: [lighter(c0), c1, c2, '#111111'],
+    background: palette.bg,
+    ink: palette.onBg,
+    colors: [palette.bg, palette.surface, palette.accent, palette.accent2],
+    palette,
     keywords: [],
     kind: 'art',
     variants: artVariants,

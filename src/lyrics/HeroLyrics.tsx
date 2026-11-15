@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { gsap } from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { Eye, EyeOff, Sparkles } from 'lucide-react';
@@ -7,251 +7,309 @@ import { parseLrc } from './client';
 import type { LyricLine, LyricsRecord } from './client';
 
 type Props = {
+  trackId?: string;
   lyrics: LyricsRecord | null;
   progressRef: React.MutableRefObject<ProgressState>;
   onSeek: (fraction: number) => void;
-  accentColor: string;
 };
 
-const STORAGE_KEY = 'auraplayer_show_lyrics';
+type DisplayPayload = { trackId?: string; lyrics: LyricsRecord | null };
+type Geometry = { offset: number; height: number };
 
-function readLyricsPref(): boolean {
+const STORAGE_KEY = 'auraplayer_show_lyrics';
+const readLyricsPref = () => {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved !== null ? JSON.parse(saved) : true;
-  } catch {
-    return true;
-  }
-}
+  } catch { return true; }
+};
 
-function saveLyricsPref(val: boolean) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(val));
-  } catch {}
-}
-
-function HeroLyricsView({ lyrics, progressRef, onSeek, accentColor }: Props) {
+function HeroLyricsView({ trackId, lyrics, progressRef, onSeek }: Props) {
   const [showLyrics, setShowLyrics] = useState<boolean>(readLyricsPref);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [display, setDisplay] = useState<DisplayPayload>({ trackId, lyrics });
   const viewportRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const gapRef = useRef<HTMLDivElement>(null);
+  const lineRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const textRefs = useRef<Array<HTMLSpanElement | null>>([]);
+  const geometryRef = useRef<Geometry[]>([]);
+  const activeIndexRef = useRef(-1);
+  const seekTargetRef = useRef<number | null>(null);
+  const seekStartedAtRef = useRef(0);
+  const resizeSyncRef = useRef(false);
+  const reducedMotionRef = useRef(false);
+  const targetRef = useRef<DisplayPayload>({ trackId, lyrics });
+  const initializedRef = useRef(false);
 
-  // Line elements refs for direct DOM mutation without React state ticks
-  const prevLineRef = useRef<HTMLButtonElement>(null);
-  const currentLineRef = useRef<HTMLButtonElement>(null);
-  const nextLine1Ref = useRef<HTMLButtonElement>(null);
-  const nextLine2Ref = useRef<HTMLButtonElement>(null);
-  const chorusBadgeRef = useRef<HTMLSpanElement>(null);
-
-  const synced = lyrics?.syncedLyrics || '';
-  const syncedEntries: LyricLine[] = useMemo(() => (synced ? parseLrc(synced) : []), [synced]);
-  const plainLines: string[] = useMemo(
-    () => lyrics?.plainLyrics?.split(/\r?\n/).map(s => s.trim()).filter(Boolean) || [],
-    [lyrics]
+  const synced = display.lyrics?.syncedLyrics || '';
+  const entries = useMemo(() => (synced ? parseLrc(synced) : []), [synced]);
+  const plainLines = useMemo(
+    () => display.lyrics?.plainLyrics?.split(/\r?\n/).map(line => line.trim()).filter(Boolean) || [],
+    [display.lyrics]
   );
-  const hasLyrics = syncedEntries.length > 0 || plainLines.length > 0;
+  const hasLyrics = entries.length > 0 || plainLines.length > 0;
 
-  const currentIdxRef = useRef<number>(-1);
-  const entriesRef = useRef<LyricLine[]>(syncedEntries);
-  entriesRef.current = syncedEntries;
+  const toggleVisibility = () => setShowLyrics(value => {
+    const next = !value;
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* private browsing */ }
+    return next;
+  });
 
-  // Toggle button handler
-  const toggleVisibility = () => {
-    setShowLyrics(prev => {
-      const next = !prev;
-      saveLyricsPref(next);
-      return next;
-    });
-  };
-
-  // Keyboard shortcut: 'L' key
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).matches('input,textarea,button')) return;
-      if (e.key === 'l' || e.key === 'L') {
-        e.preventDefault();
-        toggleVisibility();
-      }
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.matches('input,textarea,button,[contenteditable="true"]')) return;
+      if (event.key.toLowerCase() === 'l') { event.preventDefault(); toggleVisibility(); }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  // Collapse / Expand animation
-  useGSAP(
-    () => {
-      if (!viewportRef.current) return;
-      if (showLyrics) {
-        gsap.to(viewportRef.current, {
-          height: 'auto',
-          opacity: 1,
-          y: 0,
-          scaleY: 1,
-          duration: 0.32,
-          ease: 'power3.out',
-          overwrite: true
-        });
-      } else {
-        gsap.to(viewportRef.current, {
-          height: 0,
-          opacity: 0,
-          y: -8,
-          scaleY: 0.94,
-          duration: 0.24,
-          ease: 'power3.in',
-          overwrite: true
+  // Keep the outgoing list mounted while it fades; new track data enters only after fade-out.
+  useLayoutEffect(() => {
+    const next = { trackId, lyrics };
+    const prev = targetRef.current;
+    const changed = prev.trackId !== next.trackId || prev.lyrics !== next.lyrics;
+    if (!changed && initializedRef.current) return;
+    targetRef.current = next;
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      setDisplay(next);
+      return;
+    }
+
+    const content = contentRef.current;
+    if (!content) { setDisplay(next); return; }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      gsap.killTweensOf(content);
+      gsap.set(content, { opacity: 1, y: 0 });
+      setDisplay(next);
+      return;
+    }
+    const token = Symbol('lyrics-transition');
+    (content as HTMLDivElement & { __transition?: symbol }).__transition = token;
+    gsap.killTweensOf(content);
+    gsap.to(content, {
+      opacity: 0, y: -8, duration: 0.25, ease: 'power2.in', overwrite: true,
+      onComplete: () => {
+        if ((content as HTMLDivElement & { __transition?: symbol }).__transition !== token) return;
+        setDisplay(next);
+        requestAnimationFrame(() => {
+          if ((content as HTMLDivElement & { __transition?: symbol }).__transition !== token) return;
+          gsap.fromTo(content, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.4, ease: 'power3.out', overwrite: true });
         });
       }
-    },
-    { dependencies: [showLyrics], revertOnUpdate: false }
-  );
+    });
+  }, [trackId, lyrics]);
 
-  // Kinetic lyric line updates on gsap.ticker
-  useGSAP(
-    () => {
-      const entries = syncedEntries;
-      if (!entries.length) {
-        // Plain lyrics fallback setup
-        if (plainLines.length) {
-          if (prevLineRef.current) prevLineRef.current.textContent = '';
-          if (currentLineRef.current) currentLineRef.current.textContent = plainLines[0] || '';
-          if (nextLine1Ref.current) nextLine1Ref.current.textContent = plainLines[1] || '';
-          if (nextLine2Ref.current) nextLine2Ref.current.textContent = plainLines[2] || '';
-        }
-        return;
+  // Measure lyric offsets only after load and on resize, never from the playback ticker.
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const list = listRef.current;
+    if (!viewport || !list || !entries.length) { geometryRef.current = []; return; }
+    let disposed = false;
+    const measure = () => {
+      if (disposed) return;
+      geometryRef.current = entries.map((_, index) => {
+        const node = lineRefs.current[index];
+        if (!node) return { offset: 0, height: 0 };
+        // offsetTop is layout-space and is unaffected by the animated list transform.
+        return { offset: node.offsetTop, height: node.offsetHeight };
+      });
+      if (activeIndexRef.current >= 0) resizeSyncRef.current = true;
+    };
+    // Fonts can change wrapping and row height; wait for the actual font metrics.
+    void document.fonts.ready.then(measure);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(list);
+    return () => { disposed = true; observer.disconnect(); };
+  }, [entries, display.trackId, showLyrics]);
+
+  useGSAP(() => {
+    const viewport = viewportRef.current;
+    const list = listRef.current;
+    const marker = barRef.current;
+    if (!viewport || !list || !marker) return;
+
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    reducedMotionRef.current = media.matches;
+    const onMotionChange = (event: MediaQueryListEvent) => { reducedMotionRef.current = event.matches; };
+    media.addEventListener('change', onMotionChange);
+
+    const setListY = gsap.quickTo(list, 'y', { duration: 0.58, ease: 'power3.out', overwrite: 'auto' });
+    const progressSetters = textRefs.current.map(node => node ? gsap.quickSetter(node, '--lyric-progress') : null);
+    let active = -1;
+    let gapActive = false;
+
+    const animateIndex = (index: number, fast: boolean) => {
+      active = index;
+      activeIndexRef.current = index;
+      const viewportHeight = viewport.clientHeight;
+      const geometry = geometryRef.current[index];
+      if (geometry) {
+        const y = viewportHeight * 0.4 - geometry.offset - geometry.height * 0.5;
+        if (reducedMotionRef.current) gsap.set(list, { y });
+        else if (fast) gsap.to(list, { y, duration: 0.35, ease: 'power3.out', overwrite: 'auto' });
+        else setListY(y);
+        const barHeight = Math.min(54, Math.max(30, geometry.height * 0.76));
+        const barY = geometry.offset + geometry.height * 0.5 - barHeight * 0.5;
+        const barScale = barHeight / 40;
+        if (reducedMotionRef.current) gsap.set(marker, { y: barY, scaleY: barScale });
+        else gsap.to(marker, { y: barY, scaleY: barScale, duration: fast ? 0.3 : 0.42, ease: 'power3.out', overwrite: 'auto' });
       }
 
-      currentIdxRef.current = -1;
-
-      const paint = () => {
-        const p = progressRef.current;
-        const elapsed = p.playing ? Math.max(0, performance.now() - p.updatedAt) : 0;
-        const position = Math.min(p.duration, p.position + elapsed);
-
-        // Binary search active line
-        let low = 0;
-        let high = entries.length - 1;
-        let idx = 0;
-        while (low <= high) {
-          const mid = (low + high) >> 1;
-          if (entries[mid].at <= position) {
-            idx = mid;
-            low = mid + 1;
-          } else {
-            high = mid - 1;
-          }
+      const low = Math.max(0, index - 5);
+      const high = Math.min(entries.length - 1, index + 5);
+      lineRefs.current.forEach((node, lineIndex) => {
+        if (!node) return;
+        const lyricText = textRefs.current[lineIndex];
+        if (lyricText) lyricText.classList.toggle('is-active', lineIndex === index);
+        if (lineIndex === index) node.setAttribute('aria-current', 'true');
+        else node.removeAttribute('aria-current');
+        if (lineIndex < low || lineIndex > high) {
+          const distance = Math.abs(lineIndex - index);
+          node.style.color = 'var(--on-surface)';
+          node.style.backgroundColor = 'var(--surface)';
+          node.style.fontWeight = '600';
+          gsap.set(node, { opacity: distance > 3 ? 0.85 : 0.9, scale: 0.9 });
+          return;
         }
+        const distance = Math.abs(lineIndex - index);
+        const opacity = lineIndex === index ? 1 : distance > 3 ? 0.85 : 0.9;
+        const scale = lineIndex === index ? 1 : 0.9;
+        const color = lineIndex === index ? 'var(--on-accent)' : 'var(--on-surface)';
+        const weight = lineIndex === index ? 800 : 600;
+        node.style.color = color;
+        node.style.backgroundColor = lineIndex === index ? 'var(--on-accent)' : 'var(--surface)';
+        node.style.fontWeight = String(weight);
+        if (reducedMotionRef.current) gsap.set(node, { opacity, scale: 1 });
+        else gsap.to(node, { opacity, scale, duration: 0.4, ease: 'power3.out', overwrite: 'auto' });
+      });
+    };
 
-        if (idx !== currentIdxRef.current) {
-          currentIdxRef.current = idx;
-          const prev = entries[idx - 1]?.text || '';
-          const curr = entries[idx]?.text || '';
-          const next1 = entries[idx + 1]?.text || '';
-          const next2 = entries[idx + 2]?.text || '';
-          const isChorus = entries[idx]?.isChorus || false;
+    const paint = () => {
+      if (!entries.length) return;
+      const playback = progressRef.current;
+      const elapsed = playback.playing ? Math.max(0, performance.now() - playback.updatedAt) : 0;
+      const position = Math.min(playback.duration || Infinity, playback.position + elapsed);
+      let lo = 0;
+      let hi = entries.length - 1;
+      let index = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (entries[mid].at <= position) { index = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      let displayIndex = index;
+      const seekTarget = seekTargetRef.current;
+      if (seekTarget !== null) {
+        const seekReached = Math.abs(position - entries[seekTarget].at) < 1500;
+        const seekTimedOut = performance.now() - seekStartedAtRef.current > 2500;
+        if (seekReached || seekTimedOut) seekTargetRef.current = null;
+        else displayIndex = seekTarget;
+      }
+      if (displayIndex !== active || resizeSyncRef.current) {
+        const fast = seekTargetRef.current !== null;
+        resizeSyncRef.current = false;
+        animateIndex(displayIndex, fast);
+      }
 
-          if (prevLineRef.current) prevLineRef.current.textContent = prev;
-          if (currentLineRef.current) currentLineRef.current.textContent = curr;
-          if (nextLine1Ref.current) nextLine1Ref.current.textContent = next1;
-          if (nextLine2Ref.current) nextLine2Ref.current.textContent = next2;
-
-          if (chorusBadgeRef.current) {
-            chorusBadgeRef.current.style.display = isChorus ? 'inline-flex' : 'none';
-          }
-
-          // Transform & Opacity slide-up transition on line change
-          if (currentLineRef.current) {
-            gsap.fromTo(
-              currentLineRef.current,
-              { y: 14, opacity: 0.3 },
-              { y: 0, opacity: 1, duration: 0.28, ease: 'power2.out', overwrite: true }
-            );
-          }
+      const line = entries[displayIndex];
+      const next = entries[displayIndex + 1];
+      const isGap = !!next && next.at - line.at > 6000 && position > line.at + 1200 && position < next.at;
+      if (isGap !== gapActive) {
+        gapActive = isGap;
+        const sticker = gapRef.current;
+        if (sticker) {
+          if (isGap && playback.playing && !reducedMotionRef.current) gsap.to(sticker, { autoAlpha: 1, y: 0, duration: 0.18, overwrite: true });
+          else gsap.to(sticker, { autoAlpha: 0, y: 5, duration: 0.15, overwrite: true });
         }
-      };
+      }
+      if (gapActive && gapRef.current) {
+        gapRef.current.dataset.playing = String(playback.playing && !reducedMotionRef.current);
+      }
 
-      paint();
-      gsap.ticker.add(paint);
-      return () => gsap.ticker.remove(paint);
-    },
-    { dependencies: [syncedEntries, plainLines], revertOnUpdate: false }
-  );
+      // Local interpolation drives the accent mask; React never receives playback ticks.
+      const text = textRefs.current[displayIndex];
+      if (text) {
+        const start = line.at;
+        const end = next?.at ?? (start + Math.max(1000, line.duration));
+        const fraction = playback.playing ? Math.max(0, Math.min(1, (position - start) / Math.max(1, end - start))) : Math.max(0, Math.min(1, (playback.position - start) / Math.max(1, end - start)));
+        progressSetters[displayIndex]?.(`${fraction * 100}%`);
+      }
+    };
 
-  const seekLineAt = (offset: number) => {
-    const entries = entriesRef.current;
+    gsap.ticker.add(paint);
+    paint();
+    return () => {
+      gsap.ticker.remove(paint);
+      media.removeEventListener('change', onMotionChange);
+    };
+  }, { dependencies: [entries, display.trackId], revertOnUpdate: true });
+
+  // Toggle height separately so lyric text itself is never replaced by the animation.
+  useGSAP(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const targetHeight = Math.min(360, Math.max(220, window.innerHeight * 0.32));
+    if (showLyrics) gsap.to(viewport, { height: entries.length ? targetHeight : 'auto', opacity: 1, duration: 0.3, ease: 'power3.out', overwrite: true });
+    else gsap.to(viewport, { height: 0, opacity: 0, duration: 0.22, ease: 'power2.in', overwrite: true });
+  }, { dependencies: [showLyrics, entries.length], revertOnUpdate: false });
+
+  const seekLineAt = (index: number) => {
     if (!entries.length) return;
-    const targetIdx = Math.max(0, Math.min(entries.length - 1, currentIdxRef.current + offset));
-    const targetLine = entries[targetIdx];
-    if (targetLine && progressRef.current.duration) {
-      onSeek(targetLine.at / progressRef.current.duration);
+    const duration = progressRef.current.duration;
+    if (duration > 0) {
+      seekTargetRef.current = index;
+      seekStartedAtRef.current = performance.now();
+      onSeek(entries[index].at / duration);
     }
   };
 
   return (
-    <div ref={containerRef} className="hero-lyrics-wrapper">
+    <div className="hero-lyrics-wrapper">
       <div className="hero-lyrics-toolbar">
-        <button
-          className="lyrics-toggle-btn"
-          onClick={toggleVisibility}
-          title="Toggle lyrics overlay (Shortcut: L)"
-        >
+        <button className="lyrics-toggle-btn" onClick={toggleVisibility} aria-label={showLyrics ? 'Hide lyrics' : 'Show lyrics'} title="Toggle lyrics (L)">
           {showLyrics ? <EyeOff size={13} /> : <Eye size={13} />}
-          <span>{showLyrics ? 'HIDE LYRICS' : 'SHOW LYRICS'}</span>
-          <kbd>L</kbd>
+          <span>{showLyrics ? 'HIDE LYRICS' : 'SHOW LYRICS'}</span><kbd>L</kbd>
         </button>
-        {showLyrics && hasLyrics && (
-          <span className="lyrics-type-badge">
-            <Sparkles size={11} /> {syncedEntries.length ? 'SYNCED' : 'PLAIN'}
-          </span>
-        )}
+        {showLyrics && hasLyrics && <span className="lyrics-type-badge"><Sparkles size={11} /> {entries.length ? 'SYNCED' : 'PLAIN'}</span>}
       </div>
 
-      <div
-        ref={viewportRef}
-        className="hero-lyrics-viewport"
-        style={{ '--lyric-accent': accentColor } as React.CSSProperties}
-      >
-        {hasLyrics ? (
-          <div className="hero-lyrics-stack">
-            {/* Previous Line (Dimmed) */}
-            <button
-              ref={prevLineRef}
-              className="hero-lyric-line is-prev"
-              onClick={() => seekLineAt(-1)}
-              title="Click to seek back"
-            />
-
-            {/* Current Line (Large & Bold with Scene Accent Color) */}
-            <div className="hero-lyric-current-row">
-              <button
-                ref={currentLineRef}
-                className="hero-lyric-line is-current"
-                onClick={() => seekLineAt(0)}
-                title="Active lyric line"
-              />
-              <span ref={chorusBadgeRef} className="hero-chorus-badge">
-                CHORUS
-              </span>
+      <div ref={viewportRef} className={`hero-lyrics-viewport ${entries.length ? 'is-synced' : 'is-plain'}`}>
+        <div ref={contentRef} className="hero-lyrics-content">
+          {entries.length ? (
+            <>
+              <div ref={listRef} className="hero-lyrics-list">
+                <div ref={barRef} className="hero-lyric-highlight-bar" aria-hidden="true" />
+                {entries.map((line: LyricLine, index) => (
+                  <button
+                    key={`${line.at}-${index}`}
+                    ref={node => { lineRefs.current[index] = node; }}
+                    className="hero-lyric-list-line"
+                    data-lyric-index={index}
+                    aria-current={activeIndexRef.current === index ? 'true' : undefined}
+                    aria-label={`Seek to ${line.text}`}
+                    onClick={() => seekLineAt(index)}
+                  >
+                    <span ref={node => { textRefs.current[index] = node; }} className="hero-lyric-text">{line.text}</span>
+                  </button>
+                ))}
+              </div>
+              <div ref={gapRef} className="hero-lyrics-gap" aria-label="Instrumental break" aria-hidden="true">
+                <b>...</b><span><i /><i /><i /></span>
+              </div>
+            </>
+          ) : plainLines.length ? (
+            <div className="hero-lyrics-plain" aria-label="Plain lyrics">
+              {plainLines.map((line, index) => <p key={`${index}-${line}`}>{line}</p>)}
             </div>
-
-            {/* Next 2 Lines (Dimmed) */}
-            <button
-              ref={nextLine1Ref}
-              className="hero-lyric-line is-next"
-              onClick={() => seekLineAt(1)}
-              title="Click to seek forward"
-            />
-            <button
-              ref={nextLine2Ref}
-              className="hero-lyric-line is-next is-faint"
-              onClick={() => seekLineAt(2)}
-              title="Click to seek forward"
-            />
-          </div>
-        ) : (
-          <div className="hero-lyrics-missing">
-            <span className="no-lyrics-sticker">NO LYRICS FOUND</span>
-          </div>
-        )}
+          ) : <div className="hero-lyrics-missing"><span className="no-lyrics-sticker">NO LYRICS FOUND</span></div>}
+        </div>
       </div>
     </div>
   );
