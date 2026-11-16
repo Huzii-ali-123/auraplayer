@@ -13,10 +13,12 @@ Repository: [github.com/Huzii-ali-123/auraplayer](https://github.com/Huzii-ali-1
 - Spotify search, playlists, and the current Spotify queue.
 - A wheel player with an SVG progress ring and album art.
 - Nine scene palettes: Snow, Rain, Night Stars, Fireflies, Embers, Ocean, Sunset, Neon City, and Cherry Blossom.
-- A custom Canvas 2D renderer draws geometric particles. Scene changes use a GSAP color wipe.
+- A custom Canvas 2D renderer draws geometric particles. Track changes reveal the incoming flat scene left-to-right with a slow, zipper-style GSAP transition while the player remains visible.
 - Synced or plain lyrics are shown when LRCLIB has a match. Missing lyrics leave the player in its normal scene.
 - Optional Last.fm similarity data can fill the autoplay queue. Without a Last.fm key, AuraPlayer can fall back to Spotify search.
 - Responsive layout, reduced-motion support, keyboard shortcuts, and a development-only frame meter.
+- Installable PWA with a home-screen icon, standalone display, and cached app shell. Spotify playback still needs an internet connection.
+- Optional related-track autoplay fills Spotify's queue for single-track playback in the background; Next is sent immediately and rapid duplicate skip clicks are ignored while Spotify changes tracks.
 
 ## Requirements
 
@@ -54,6 +56,10 @@ npm run dev
 ```
 
 Always open **[http://127.0.0.1:5173/](http://127.0.0.1:5173/)**, never `localhost`. Vite binds to IPv4 `127.0.0.1` on port `5173` and refuses to silently switch ports. If `5173` is already in use, stop the other dev server first. The app redirects a `localhost:5173` page to the canonical IP origin before React and Spotify authentication start, so the PKCE storage and callback share the same origin.
+
+## Install AuraPlayer on a phone
+
+Deploy the site to HTTPS (the Vercel URL is already HTTPS), then open it in the phone's browser and use **INSTALL APP** if offered. On iPhone/iPad, open the page in Safari, tap **Share**, then **Add to Home Screen**. On Android, use **Install app** from the browser prompt or menu. The installed shortcut opens AuraPlayer in a standalone app window. Keep an internet connection for Spotify sign-in, search, lyrics, and streaming; the service worker only caches the app shell and static files.
 
 ## Configure Spotify
 
@@ -119,6 +125,7 @@ In Spotify Developer Dashboard, register both the local URI (`http://127.0.0.1:5
 - Press **L** to toggle the lyrics display.
 - Use **SEARCH**, **PLAYLISTS**, and **UP NEXT** to find music and inspect the queue.
 - Click the wheel's progress ring to seek. Adjust volume and shuffle in the expanded player panel.
+- The expanded panel's repeat control cycles **Repeat All → Repeat One → Repeat Off**. With single-track playback and related picks enabled, AuraPlayer fills the Spotify queue in the background. Next is dispatched immediately; duplicate clicks are ignored during the track transition.
 
 Lyrics are retrieved from [LRCLIB](https://lrclib.net/) using track metadata and duration. Availability depends on that service's catalogue; instrumental tracks and tracks with no match show the player without lyrics. Spotify does not provide the lyrics used by this interface.
 

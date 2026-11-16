@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   AudioLines,
+  Download,
   Headphones,
   ListMusic,
   LogOut,
@@ -58,22 +59,54 @@ const emptyProgress = (): ProgressState => ({
 
 function TrackStamp({ track }: { track: Track | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
+  const title = (track?.name || 'SOUND BECOMES SPACE').toUpperCase();
+  const titleLength = title.length;
+  const fontSize = titleLength <= 8
+    ? 'clamp(3.8rem, 8vw, 9.5rem)'
+    : titleLength <= 20
+      ? 'clamp(3rem, 6vw, 6rem)'
+      : titleLength <= 36
+        ? 'clamp(2.25rem, 4.5vw, 4.5rem)'
+        : 'clamp(1.65rem, 3.1vw, 3.1rem)';
   useGSAP(
     () => {
       if (!heading.current) return;
       gsap.fromTo(
         heading.current,
-        { yPercent: 110, opacity: 0 },
-        { yPercent: 0, opacity: 1, duration: 0.65, ease: 'power3.out' }
+        { yPercent: 16, opacity: 0.35 },
+        { yPercent: 0, opacity: 1, duration: 0.48, ease: 'power3.out' }
       );
     },
     { dependencies: [track?.id] }
   );
   return (
     <div className="stamp-mask">
-      <h1 ref={heading} className="track-stamp">
-        {(track?.name || 'SOUND BECOMES SPACE').toUpperCase()}
+      <h1 ref={heading} className="track-stamp" style={{ fontSize }}>
+        {title}
       </h1>
+    </div>
+  );
+}
+
+function HeroArtwork({ track }: { track: Track | null }) {
+  const frame = useRef<HTMLDivElement>(null);
+  useGSAP(() => {
+    if (!frame.current) return;
+    gsap.fromTo(frame.current, { opacity: 0.65, y: 12, scale: 0.985 }, {
+      opacity: 1, y: 0, scale: 1, duration: 0.55, ease: 'power3.out', overwrite: true
+    });
+  }, { dependencies: [track?.id] });
+
+  return (
+    <div className="hero-artwork" ref={frame}>
+      <div className="hero-art-mat">
+        {track?.album?.images?.[0]?.url ? (
+          <img src={track.album.images[0].url} alt={`${track.name || 'Album'} cover art`} />
+        ) : (
+          <div className="art-placeholder"><AudioLines size={42} /></div>
+        )}
+      </div>
+      <b>ART / 01</b>
     </div>
   );
 }
@@ -86,10 +119,14 @@ export default function App() {
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
   const activeTrackId = useRef('');
+  const skipInFlight = useRef(false);
+  const skipReleaseTimer = useRef<number | undefined>(undefined);
+  const currentTrackRef = useRef<Track | null>(null);
   const progressRef = useRef<ProgressState>(emptyProgress());
   const player = useRef<SpotifyPlayer | null>(null);
   const [volume, setVolume] = useState(68);
   const [shuffle, setShuffle] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<'off' | 'context' | 'track'>('off');
   const [expanded, setExpanded] = useState(false);
   const [startDismissed, setStartDismissed] = useState(() => {
     try { return sessionStorage.getItem('auraplayer_start_dismissed') === '1'; }
@@ -107,6 +144,11 @@ export default function App() {
   const [dominant, setDominant] = useState<{ trackId: string; colors: [string, string, string] } | null>(null);
   const [lyrics, setLyrics] = useState<LyricsRecord | null>(null);
   const [notice, setNotice] = useState('');
+  const [installPrompt, setInstallPrompt] = useState<(Event & {
+    prompt: () => Promise<void>;
+    userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+  }) | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
   const [visibleScene, setVisibleScene] = useState<Scene>(scenes[3]); // Night Stars default
   const shellRef = useRef<HTMLElement>(null);
   const initialPalette = useMemo(() => buildPalette(undefined, {
@@ -116,6 +158,37 @@ export default function App() {
     accent2: scenes[3].colors[3]
   }), []);
   const noticeTimer = useRef<number>();
+
+  useEffect(() => {
+    const promptInstall = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as Event & {
+        prompt: () => Promise<void>;
+        userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+      });
+    };
+    const installed = () => {
+      setIsInstalled(true);
+      setInstallPrompt(null);
+      setNotice('AURA//PLAYER ADDED TO YOUR HOME SCREEN.');
+    };
+    const standalone = window.matchMedia('(display-mode: standalone)').matches ||
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+    setIsInstalled(standalone);
+    window.addEventListener('beforeinstallprompt', promptInstall);
+    window.addEventListener('appinstalled', installed);
+    return () => {
+      window.removeEventListener('beforeinstallprompt', promptInstall);
+      window.removeEventListener('appinstalled', installed);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
+    void navigator.serviceWorker.register('/sw.js').catch(error => {
+      if (import.meta.env.DEV) console.warn('AuraPlayer offline shell registration failed:', error);
+    });
+  }, []);
 
   activeTrackId.current = track?.id || '';
 
@@ -168,6 +241,7 @@ export default function App() {
   const commitTrack = useCallback((next: Track | null) => {
     if (!next) {
       activeTrackId.current = '';
+      currentTrackRef.current = null;
       setTrack(null);
       return;
     }
@@ -183,7 +257,16 @@ export default function App() {
         images: Array.isArray(next.album?.images) ? next.album.images : []
       }
     };
+    if (skipInFlight.current && safeTrack.id !== activeTrackId.current) {
+      window.clearTimeout(skipReleaseTimer.current);
+      // Keep a short post-transition guard so queued double-clicks cannot skip
+      // the next song as soon as Spotify emits its first state update.
+      skipReleaseTimer.current = window.setTimeout(() => {
+        skipInFlight.current = false;
+      }, 420);
+    }
     activeTrackId.current = safeTrack.id;
+    currentTrackRef.current = safeTrack;
     setTrack(safeTrack);
     if (safeTrack.uri) {
       autoplayEngine.markTrackPlayed(safeTrack.uri);
@@ -204,6 +287,7 @@ export default function App() {
     playingRef.current = !!state.is_playing;
     setPlaying(!!state.is_playing);
     setShuffle(!!state.shuffle_state);
+    setRepeatMode(state.repeat_state || 'off');
     if (state.device?.volume_percent != null) setVolume(state.device.volume_percent);
   };
 
@@ -240,7 +324,33 @@ export default function App() {
           isAutoplay: autoplayEngine.isAutoQueued(item.uri)
         });
       }
-      setQueue(upNext);
+      setQueue(previous => {
+        const stable = previous.slice();
+        const known = new Set(stable.map(item => item.id || item.uri));
+        // Refresh suggestion badges as the Spotify queue learns about tracks
+        // that the async recommendation pass just inserted; keep their rows
+        // in the same position while updating that metadata in place.
+        const incoming = new Map(upNext.map(item => [item.id || item.uri, item]));
+        for (let index = 0; index < stable.length; index++) {
+          const key = stable[index].id || stable[index].uri;
+          const latest = incoming.get(key);
+          if (!latest) continue;
+          stable[index] = {
+            ...stable[index],
+            isAutoplay: stable[index].isAutoplay || latest.isAutoplay
+          };
+          incoming.delete(key);
+        }
+        const addOnce = (item: Track) => {
+          const key = item.id || item.uri;
+          if (!key || known.has(key)) return;
+          known.add(key);
+          stable.push({ ...item, isAutoplay: autoplayEngine.isAutoQueued(item.uri) });
+        };
+        if (currentTrackRef.current) addOnce(currentTrackRef.current);
+        upNext.forEach(addOnce);
+        return stable;
+      });
       return upNext;
     } catch {
       return [];
@@ -512,6 +622,14 @@ export default function App() {
   };
 
   const command = async (path: 'next' | 'previous') => {
+    if (path === 'next' && skipInFlight.current) return;
+    if (path === 'next') {
+      skipInFlight.current = true;
+      window.clearTimeout(skipReleaseTimer.current);
+      skipReleaseTimer.current = window.setTimeout(() => {
+        skipInFlight.current = false;
+      }, 1500);
+    }
     try {
       if (player.current) {
         if (path === 'next') await player.current.nextTrack();
@@ -521,6 +639,10 @@ export default function App() {
       if (!device) throw new Error('Start AuraPlayer to make it an active Spotify device.');
       await spotify(`/me/player/${path}?device_id=${device}`, { method: 'POST' });
     } catch (error) {
+      if (path === 'next') {
+        skipInFlight.current = false;
+        window.clearTimeout(skipReleaseTimer.current);
+      }
       announce(error);
     }
   };
@@ -593,9 +715,34 @@ export default function App() {
     setShuffle(next);
     try {
       await spotify(`/me/player/shuffle?state=${next}`, { method: 'PUT' });
+      setQueue([]);
+      await loadQueue();
     } catch (error) {
       announce(error);
     }
+  };
+
+  const repeatToggle = async () => {
+    const next = repeatMode === 'off' ? 'context' : repeatMode === 'context' ? 'track' : 'off';
+    try {
+      await spotify(`/me/player/repeat?state=${next}`, { method: 'PUT' });
+      setRepeatMode(next);
+    } catch (error) {
+      announce(error);
+    }
+  };
+
+  const installApp = async () => {
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === 'accepted') setInstallPrompt(null);
+      return;
+    }
+    const isAppleMobile = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    setNotice(isAppleMobile
+      ? 'TO INSTALL: TAP SHARE, THEN “ADD TO HOME SCREEN”.'
+      : 'TO INSTALL: OPEN YOUR BROWSER MENU AND CHOOSE “INSTALL APP” OR “ADD TO HOME SCREEN”.');
   };
 
   const toggleAutoplay = () => {
@@ -622,6 +769,24 @@ export default function App() {
   const closeLibrary = () => {
     setSearchOpen(false);
     setPlaylistOpen(false);
+  };
+
+  const openSearch = () => {
+    setExpanded(false);
+    setPlaylistOpen(false);
+    setSearchOpen(true);
+  };
+
+  const openPlaylists = async () => {
+    setExpanded(false);
+    setSearchOpen(false);
+    try {
+      const data = await spotify<{ items: Playlist[] }>('/me/playlists?limit=30');
+      setPlaylists((data?.items || []).filter(Boolean));
+      setPlaylistOpen(true);
+    } catch (error) {
+      announce(error);
+    }
   };
 
   // Keyboard shortcuts
@@ -720,12 +885,23 @@ export default function App() {
         </a>
         <span className="mast-sticker">SCENE ENGINE / LIVE</span>
         <div className="mast-actions">
+          <button className="quick-library-btn" onClick={openSearch} aria-label="Search Spotify" title="Search tracks">
+            <Search size={14} /><span>SEARCH</span>
+          </button>
+          <button className="quick-library-btn" onClick={() => void openPlaylists()} aria-label="Open your playlists" title="Your playlists">
+            <ListMusic size={14} /><span>PLAYLISTS</span>
+          </button>
+          {!isInstalled && (
+            <button className="install-app-btn" onClick={() => void installApp()} aria-label="Install AuraPlayer app">
+              <Download size={14} /> INSTALL APP
+            </button>
+          )}
           <button
             className={`mast-queue-btn ${queueOpen ? 'is-active' : ''}`}
             onClick={() => setQueueOpen(!queueOpen)}
             title="Toggle Up Next Queue Panel"
           >
-            <ListMusic size={14} /> UP NEXT ({queue.length})
+            <ListMusic size={14} /> PLAY ORDER ({queue.length})
           </button>
           <span className="device-state">
             <i className={device ? 'online' : ''} />
@@ -761,45 +937,33 @@ export default function App() {
           </span>
         </div>
 
-        <TrackStamp track={track} />
-
-        <HeroLyrics
-          trackId={track?.id}
-          lyrics={lyrics}
-          progressRef={progressRef}
-          onSeek={fraction => void seek(fraction)}
-        />
-
-        <div className="hero-lower">
-          <div className="hero-credit">
-            <span className="credit-tag">NOW PLAYING</span>
-            <p>
-              {Array.isArray(track?.artists) && track.artists.length > 0
-                ? track.artists.map(a => a?.name || '').filter(Boolean).join(' / ') ||
-                  'YOUR NEXT FAVORITE TRACK'
-                : 'YOUR NEXT FAVORITE TRACK'}
-            </p>
-            <small>{track?.album?.name || 'CONNECT YOUR SPOTIFY TO BEGIN'}</small>
+        <div className="hero-editorial-grid">
+          <div className="hero-art-column">
+            <HeroArtwork track={track} />
+            <div className="hero-facts">
+              <span>ATMOSPHERE</span><strong>{visibleScene.label.toUpperCase()}</strong>
+              <span>ALBUM</span><strong>{track?.album?.name || 'AURA ARCHIVE'}</strong>
+              <span>RUNTIME</span><strong>{track?.duration_ms ? fmt(track.duration_ms) : '0:00'}</strong>
+            </div>
           </div>
-          <div className="hero-artwork">
-            {track?.album?.images?.[0]?.url ? (
-              <img src={track.album.images[0].url} alt={`${track.name || 'Album'} cover art`} />
-            ) : (
-              <div className="art-placeholder">
-                <AudioLines size={42} />
-              </div>
-            )}
-            <b>ART / 01</b>
-          </div>
-          <div className="hero-facts">
-            <span>ATMOSPHERE</span>
-            <strong>{visibleScene.label.toUpperCase()}</strong>
-            <span>MOTION</span>
-            <strong>{visibleScene.motionName || 'DYNAMIC'}</strong>
-            <span>RUNTIME</span>
-            <strong>{track?.duration_ms ? fmt(track.duration_ms) : '0:00'}</strong>
+          <div className="hero-copy-column">
+            <TrackStamp track={track} />
+            <div className="hero-song-meta">
+              <span>NOW PLAYING / {track?.artists?.length ? track.artists.length.toString().padStart(2, '0') : '00'}</span>
+              <p>{track?.artists?.map(artist => artist.name).filter(Boolean).join(' / ') || 'CONNECT SPOTIFY TO BEGIN'}</p>
+              <small>{track?.album?.name || 'YOUR NEXT FAVORITE TRACK'}</small>
+            </div>
+            <HeroLyrics
+              trackId={track?.id}
+              lyrics={lyrics}
+              progressRef={progressRef}
+              onSeek={fraction => void seek(fraction)}
+            />
           </div>
         </div>
+        <a className="portfolio-credit" href="https://Huzzz.tech" target="_blank" rel="noreferrer">
+          DESIGNED &amp; DEVELOPED BY HUZAIFA <ArrowUpRight size={13} />
+        </a>
       </section>
 
       {/* Ticker marquee */}
@@ -831,17 +995,17 @@ export default function App() {
         progressRef={progressRef}
         volume={volume}
         shuffle={shuffle}
+        repeatMode={repeatMode}
         expanded={expanded}
-        lyrics={lyrics}
         onToggle={() => void toggle()}
         onNext={() => void command('next')}
         onPrev={() => void command('previous')}
         onSeek={fraction => void seek(fraction)}
         onVolume={value => void setVolumeValue(value)}
         onShuffle={() => void shuffleToggle()}
+        onRepeat={() => void repeatToggle()}
         onSearch={() => {
-          setExpanded(false);
-          setSearchOpen(true);
+          openSearch();
         }}
         onQueue={() => {
           setExpanded(false);
@@ -849,7 +1013,6 @@ export default function App() {
         }}
         onExpand={() => setExpanded(true)}
         onClose={() => setExpanded(false)}
-        onNotice={msg => setNotice(msg)}
       />
       <ContrastDebugOverlay />
 
@@ -858,6 +1021,7 @@ export default function App() {
         open={queueOpen}
         onClose={() => setQueueOpen(false)}
         queue={queue}
+        currentTrackId={track?.id}
         autoplayEnabled={autoplayEnabled}
         onToggleAutoplay={toggleAutoplay}
         onClearQueue={clearQueue}

@@ -255,8 +255,7 @@ function HeroLyricsView({ trackId, lyrics, progressRef, onSeek }: Props) {
   useGSAP(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    const targetHeight = Math.min(360, Math.max(220, window.innerHeight * 0.32));
-    if (showLyrics) gsap.to(viewport, { height: entries.length ? targetHeight : 'auto', opacity: 1, duration: 0.3, ease: 'power3.out', overwrite: true });
+    if (showLyrics) gsap.to(viewport, { height: 'auto', opacity: 1, duration: 0.3, ease: 'power3.out', overwrite: true });
     else gsap.to(viewport, { height: 0, opacity: 0, duration: 0.22, ease: 'power2.in', overwrite: true });
   }, { dependencies: [showLyrics, entries.length], revertOnUpdate: false });
 

@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "AURA//PLAYER — Play it loud",
+  "short_name": "AURA//PLAYER",
+  "description": "An atmospheric Spotify player that turns every track into a living scene.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111111",
+  "theme_color": "#F3C43A",
+  "icons": [
+    { "src": "/icons/aura-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/aura-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

@@ -30,6 +30,7 @@ export type Playback = {
   item: Track | null;
   device?: { volume_percent: number };
   shuffle_state?: boolean;
+  repeat_state?: 'off' | 'context' | 'track';
 };
 
 async function readPayload(response: Response, requestPath: string): Promise<unknown> {
@@ -41,7 +42,11 @@ async function readPayload(response: Response, requestPath: string): Promise<unk
     const endpoint = requestPath.split('?')[0];
     if (
       response.ok &&
-      /^\/me\/player\/(next|previous|pause|play|seek|shuffle|volume)$/.test(endpoint)
+      // Successful player commands may return an empty body (204) or a
+      // non-JSON acknowledgement depending on the playback device/API edge.
+      // Their HTTP success status is the confirmation; don't reject the action
+      // just because the response isn't a JSON document.
+      /^\/me\/player\/(next|previous|pause|play|seek|shuffle|repeat|volume)$/.test(endpoint)
     ) {
       return null;
     }

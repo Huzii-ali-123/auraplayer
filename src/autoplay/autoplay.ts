@@ -9,6 +9,7 @@ class AutoplayEngine {
   private enabled = true;
   private isProcessing = false;
   private isContextPlay = false; // Set to true if playback is tied to an album or playlist context
+  private pending: Promise<Track[]> | null = null;
 
   public isEnabled(): boolean {
     return this.enabled;
@@ -20,6 +21,10 @@ class AutoplayEngine {
 
   public setContextPlay(val: boolean) {
     this.isContextPlay = val;
+  }
+
+  public hasContextPlay(): boolean {
+    return this.isContextPlay;
   }
 
   public markTrackPlayed(uri: string) {
@@ -37,14 +42,28 @@ class AutoplayEngine {
   /**
    * Checks current queue length and tops up with Last.fm recommendations if < 5 tracks
    */
-  public async ensureAutoplay(
+  public ensureAutoplay(
     currentTrack: Track,
     deviceId: string,
     existingQueue: Track[]
   ): Promise<Track[]> {
     if (!this.enabled || this.isContextPlay || !deviceId || !currentTrack) {
-      return [];
+      return Promise.resolve([]);
     }
+
+    // Share ongoing work so a fast Skip click waits for recommendations rather
+    // than racing the queue fill started when the track first began playing.
+    if (this.pending) return this.pending;
+    this.pending = this.fillQueue(currentTrack, deviceId, existingQueue);
+    return this.pending.finally(() => { this.pending = null; });
+  }
+
+  private async fillQueue(
+    currentTrack: Track,
+    deviceId: string,
+    existingQueue: Track[]
+  ): Promise<Track[]> {
+    if (!this.enabled || this.isContextPlay || !deviceId || !currentTrack) return [];
 
     // Filter upcoming tracks that are not already the current track
     const upcoming = existingQueue.filter(
