@@ -17,6 +17,8 @@ import { handleCallback, login, logout, validToken } from './auth/pkce';
 import { spotify } from './spotify/api';
 import type { Playback, Track } from './spotify/api';
 import { usePlayer } from './store/player';
+import { searchSongs as ytSearchSongs, nextTrack as ytNextTrack, getPlayer as ytGetPlayer, extractStreamUrl, getLyrics as ytGetLyrics, type YTTrack } from './ytmusic/api';
+import { ensureVisitorData } from './ytmusic/auth';
 import { resolveScene, scenes } from './scenes/scenes';
 import type { Scene } from './scenes/scenes';
 import { buildPalette } from './color/palette';
@@ -125,6 +127,10 @@ export default function App() {
   const progressRef = useRef<ProgressState>(emptyProgress());
   const player = useRef<SpotifyPlayer | null>(null);
   const [volume, setVolume] = useState(68);
+  const [ytConnected, setYtConnected] = useState(false);
+  const [ytTrack, setYtTrack] = useState<YTTrack | null>(null);
+  const ytAudio = useRef<HTMLAudioElement | null>(null);
+  const ytProgressRef = useRef<{ position: number; duration: number; updatedAt: number; playing: boolean }>({ position: 0, duration: 0, updatedAt: performance.now(), playing: false });
   const [shuffle, setShuffle] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'context' | 'track'>('off');
   const [expanded, setExpanded] = useState(false);
@@ -481,10 +487,11 @@ export default function App() {
     };
   }, [track?.id, track?.album?.images?.[0]?.url]);
 
-  // LRCLib Lyrics Fetching
+  // LRCLib Lyrics Fetching — skip for YouTube Music tracks (they use YT Music's own lyrics)
   useEffect(() => {
-    setLyrics(null);
     if (!track?.name) return;
+    if (track.uri?.startsWith('ytmusic:')) return;
+    setLyrics(null);
     const controller = new AbortController();
     void fetchLyrics(track, controller.signal).then(result => {
       if (!controller.signal.aborted) setLyrics(result);
@@ -590,6 +597,43 @@ export default function App() {
     };
   }, [token, announce, fetchInitialState, syncSdkState, loadQueue]);
 
+  // YouTube Music HTML5 Audio playback
+  useEffect(() => {
+    if (!ytConnected) {
+      ytAudio.current?.pause();
+      ytAudio.current = null;
+      return;
+    }
+    if (!ytAudio.current) {
+      ytAudio.current = new Audio();
+      ytAudio.current.crossOrigin = 'anonymous';
+    }
+    const audio = ytAudio.current;
+
+    const handleTimeUpdate = () => {
+      ytProgressRef.current = {
+        position: audio.currentTime * 1000,
+        duration: audio.duration * 1000,
+        updatedAt: performance.now(),
+        playing: !audio.paused
+      };
+      setPlaying(!audio.paused);
+    };
+    const handleEnded = () => {
+      setPlaying(false);
+    };
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('ended', handleEnded);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('ended', handleEnded);
+      audio.pause();
+      ytAudio.current = null;
+    };
+  }, [ytConnected]);
+
   // Search query debounce
   useEffect(() => {
     let timeout: number | undefined;
@@ -599,6 +643,21 @@ export default function App() {
     }
     timeout = window.setTimeout(async () => {
       try {
+        if (ytConnected) {
+          const result = await ytSearchSongs(query.trim());
+          setResults(result.items.map(item => ({
+            id: item.id,
+            name: item.name,
+            uri: `ytmusic:${item.id}`,
+            duration_ms: item.duration_ms || 0,
+            artists: item.artists.map(a => ({ name: a.name || '', id: a.id || '' })),
+            album: {
+              name: item.album || '',
+              images: item.thumbnail ? [{ url: item.thumbnail }] : []
+            }
+          })));
+          return;
+        }
         const data = await spotify<SearchResponse>(
           `/search?type=track&limit=8&q=${encodeURIComponent(query.trim())}`
         );
@@ -613,7 +672,12 @@ export default function App() {
 
   const toggle = async () => {
     try {
-      if (!player.current) throw new Error('Connect Spotify to start the player.');
+      if (ytConnected && ytAudio.current) {
+        if (ytAudio.current.paused) await ytAudio.current.play();
+        else await ytAudio.current.pause();
+        return;
+      }
+      if (!player.current) throw new Error('Connect Spotify or YouTube Music to start the player.');
       await player.current.activateElement();
       await player.current.togglePlay();
     } catch (error) {
@@ -622,6 +686,18 @@ export default function App() {
   };
 
   const command = async (path: 'next' | 'previous') => {
+    if (ytConnected && ytAudio.current && ytTrack) {
+      try {
+        const nextResult = await ytNextTrack(ytTrack.id);
+        const nextTrack = nextResult.items.find(i => i.id !== ytTrack?.id) || nextResult.items[0];
+        if (nextTrack) {
+          await playYTTrack(nextTrack);
+        }
+      } catch (error) {
+        announce(error);
+      }
+      return;
+    }
     if (path === 'next' && skipInFlight.current) return;
     if (path === 'next') {
       skipInFlight.current = true;
@@ -653,6 +729,10 @@ export default function App() {
     const position = Math.max(0, Math.min(duration, fraction * duration));
     progressRef.current = { ...p, position, updatedAt: performance.now() };
     try {
+      if (ytConnected && ytAudio.current) {
+        ytAudio.current.currentTime = position / 1000;
+        return;
+      }
       await player.current?.seek(position);
     } catch (error) {
       announce(error);
@@ -662,6 +742,10 @@ export default function App() {
   const setVolumeValue = async (value: number) => {
     setVolume(value);
     try {
+      if (ytConnected && ytAudio.current) {
+        ytAudio.current.volume = value / 100;
+        return;
+      }
       if (player.current) await player.current.setVolume(value / 100);
       else await spotify(`/me/player/volume?volume_percent=${value}`, { method: 'PUT' });
     } catch (error) {
@@ -671,6 +755,19 @@ export default function App() {
 
   const playTrack = async (selected: Track) => {
     try {
+      // YouTube Music track
+      if (selected.uri?.startsWith('ytmusic:')) {
+        const ytTrack: YTTrack = {
+          id: selected.id,
+          name: selected.name,
+          artists: selected.artists.map(a => ({ name: a.name || '', id: a.id || '' })),
+          album: selected.album?.name || '',
+          duration_ms: selected.duration_ms || 0,
+          thumbnail: selected.album?.images?.[0]?.url
+        };
+        await playYTTrack(ytTrack);
+        return;
+      }
       if (!device) throw new Error('Connect AuraPlayer first, then select a track.');
       autoplayEngine.setContextPlay(false);
       await player.current?.activateElement();
@@ -690,6 +787,83 @@ export default function App() {
       setSearchOpen(false);
       setPlaylistOpen(false);
       await loadQueue();
+    } catch (error) {
+      announce(error);
+    }
+  };
+
+  const playYTTrack = async (selected: YTTrack) => {
+    try {
+      // If we don't have a lyricsBrowseId (e.g. track came from search), fetch it via /next
+      let trackWithLyrics = selected;
+      if (!selected.lyricsBrowseId) {
+        try {
+          const nextResult = await ytNextTrack(selected.id);
+          if (nextResult.lyricsBrowseId) {
+            trackWithLyrics = { ...selected, lyricsBrowseId: nextResult.lyricsBrowseId };
+          }
+        } catch {
+          // Non-fatal — lyrics may just not be available
+        }
+      }
+
+      const playerResponse = await ytGetPlayer(trackWithLyrics.id);
+      const streamUrl = extractStreamUrl(playerResponse);
+      if (!streamUrl) throw new Error('YouTube Music could not resolve a playable stream for this track.');
+
+      const audio = ytAudio.current || new Audio();
+      ytAudio.current = audio;
+      audio.crossOrigin = 'anonymous';
+      // Route the stream through the backend proxy to avoid CORS on googlevideo.com
+      audio.src = `/api/ytmusic/stream?url=${encodeURIComponent(streamUrl)}`;
+      await audio.play();
+
+      setYtTrack(trackWithLyrics);
+      setYtConnected(true);
+      setPlaying(true);
+      setTrack({
+        id: trackWithLyrics.id,
+        name: trackWithLyrics.name,
+        uri: `ytmusic:${trackWithLyrics.id}`,
+        duration_ms: trackWithLyrics.duration_ms || 0,
+        artists: trackWithLyrics.artists.map(a => ({ name: a.name || '', id: a.id || '' })),
+        album: {
+          name: trackWithLyrics.album || '',
+          images: trackWithLyrics.thumbnail ? [{ url: trackWithLyrics.thumbnail }] : []
+        }
+      });
+      progressRef.current = {
+        position: 0,
+        duration: trackWithLyrics.duration_ms || 0,
+        updatedAt: performance.now(),
+        playing: true
+      };
+
+      // Fetch lyrics for this track
+      const lyricsBrowseId = trackWithLyrics.lyricsBrowseId;
+      if (trackWithLyrics.id && lyricsBrowseId) {
+        void (async () => {
+          try {
+            const ytLyrics = await ytGetLyrics(lyricsBrowseId);
+            if (ytLyrics) {
+              const synced = ytLyrics.timed.length
+                ? ytLyrics.timed.map(l => `[${Math.floor(l.time_ms / 60000)}:${String(Math.floor(l.time_ms / 1000) % 60).padStart(2, '0')}.${String(l.time_ms % 1000).padStart(3, '0')}] ${l.text}`).join('\n')
+                : '';
+              const plain = ytLyrics.plain || '';
+              setLyrics({
+                plainLyrics: plain || null,
+                syncedLyrics: synced || null,
+                instrumental: false
+              });
+            }
+          } catch {
+            setLyrics(null);
+          }
+        })();
+      }
+
+      setSearchOpen(false);
+      setPlaylistOpen(false);
     } catch (error) {
       announce(error);
     }
@@ -761,6 +935,16 @@ export default function App() {
   const connect = async () => {
     try {
       await login();
+    } catch (error) {
+      announce(error);
+    }
+  };
+
+  const connectYT = async () => {
+    try {
+      await ensureVisitorData();
+      setYtConnected(true);
+      setNotice('YOUTUBE MUSIC CONNECTED.');
     } catch (error) {
       announce(error);
     }
@@ -924,6 +1108,11 @@ export default function App() {
               <span className="spotify-glyph">●</span> CONNECT SPOTIFY <ArrowUpRight size={15} />
             </button>
           )}
+          {!ytConnected && (
+            <button className="sign-button" onClick={connectYT}>
+              <span className="yt-glyph">▶</span> CONNECT YT MUSIC
+            </button>
+          )}
         </div>
       </header>
 
@@ -1028,17 +1217,20 @@ export default function App() {
         onPlayTrack={item => void playTrack(item)}
       />
 
-      {!token && (
+      {!token && !ytConnected && (
         <div className="connect-note">
           <span>FIRST, THE GOOD STUFF.</span>
           <button onClick={connect}>
             CONNECT SPOTIFY <ArrowUpRight size={15} />
           </button>
+          <button onClick={connectYT}>
+            CONNECT YT MUSIC
+          </button>
         </div>
       )}
 
-      {token && device && !playing && !startDismissed && (
-        <div className="start-overlay-backdrop" role="dialog" aria-modal="true" aria-label="Start Spotify playback">
+      {((token && device) || ytConnected) && !playing && !startDismissed && (
+        <div className="start-overlay-backdrop" role="dialog" aria-modal="true" aria-label="Start playback">
           <button className="start-overlay" onClick={() => {
             setStartDismissed(true);
             try { sessionStorage.setItem('auraplayer_start_dismissed', '1'); } catch { /* storage may be unavailable */ }
