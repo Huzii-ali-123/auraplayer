@@ -5,7 +5,7 @@ export type YouTubePlayerApi = {
   playVideo(): void; pauseVideo(): void; loadVideoById(videoId: string): void; cueVideoById(videoId: string): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void; nextVideo(): void; previousVideo(): void;
   setVolume(volume: number): void; getCurrentTime(): number; getDuration(): number;
-  getPlayerState(): number; destroy(): void;
+  getPlayerState(): number; stopVideo(): void; destroy(): void;
 };
 let apiPromise: Promise<void> | null = null;
 export function loadYouTubeIframeApi(): Promise<void> {
@@ -43,6 +43,11 @@ export class YouTubeSource implements PlayerSource {
   private onPrevious: (() => void) | null = null;
   private onReady: (() => void) | null = null;
   private initialized = false;
+  private generation = 0;
+
+  private resetReadyPromise() {
+    this.readyPromise = new Promise<void>(resolve => { this.readyResolve = resolve; });
+  }
 
   setCallbacks(callbacks: { onEnded?: () => void; onError?: () => void; onNext?: () => void; onPrevious?: () => void; onReady?: () => void }) {
     this.onEnded = callbacks.onEnded || null;
@@ -54,8 +59,10 @@ export class YouTubeSource implements PlayerSource {
   async mount(element: HTMLElement) {
     if (this.initialized) return;
     this.initialized = true;
+    const generation = ++this.generation;
     try {
       await loadYouTubeIframeApi();
+      if (generation !== this.generation) return;
       const YT = window.YT;
       if (!YT) throw new Error('YouTube’s player API did not initialize.');
       new YT.Player(element, {
@@ -65,12 +72,13 @@ export class YouTubeSource implements PlayerSource {
           origin: window.location.origin
         },
         events: {
-          onReady: (event: { target: YouTubePlayerApi }) => this.attach(event.target),
-          onStateChange: (event: { data: number }) => this.handleState(event.data),
-          onError: (event: { data: number }) => this.handleError(event.data)
+          onReady: (event: { target: YouTubePlayerApi }) => { if (generation === this.generation) this.attach(event.target); else event.target.destroy(); },
+          onStateChange: (event: { data: number }) => { if (generation === this.generation) this.handleState(event.data); },
+          onError: (event: { data: number }) => { if (generation === this.generation) this.handleError(event.data); }
         }
       });
     } catch (error) {
+      if (generation !== this.generation) return;
       this.initialized = false;
       this.readyResolve?.();
       this.readyResolve = null;
@@ -124,6 +132,26 @@ export class YouTubeSource implements PlayerSource {
     this.player.cueVideoById(track.videoId);
   }
   hasMedia() { return this.hasLoadedVideo; }
+  async stopAndDestroy() {
+    this.generation++;
+    this.readyResolve?.();
+    this.readyResolve = null;
+    const player = this.player;
+    if (this.pollTimer) window.clearInterval(this.pollTimer);
+    this.pollTimer = undefined;
+    if (player) {
+      try { player.pauseVideo(); player.stopVideo(); } catch { /* iframe may already be torn down */ }
+      try { player.destroy(); } catch { /* iframe teardown is best effort */ }
+    }
+    this.player = null;
+    this.initialized = false;
+    this.hasLoadedVideo = false;
+    this.state = -1;
+    this.positionMs = 0;
+    this.durationMs = 0;
+    this.resetReadyPromise();
+    this.emit({ playing: false, positionMs: 0, durationMs: 0 });
+  }
   async pause() { await this.readyPromise; this.player?.pauseVideo(); }
   async resume() { await this.readyPromise; this.player?.playVideo(); }
   async next() { this.onNext?.(); }
@@ -133,5 +161,5 @@ export class YouTubeSource implements PlayerSource {
   getPositionMs() { return this.positionMs; }
   onStateChange(callback: (state: SourceState) => void) { this.listeners.add(callback); return () => this.listeners.delete(callback); }
   emit(state: SourceState) { for (const callback of this.listeners) callback(state); }
-  destroy() { if (this.pollTimer) window.clearInterval(this.pollTimer); this.player?.destroy(); this.player = null; }
+  destroy() { void this.stopAndDestroy(); }
 }

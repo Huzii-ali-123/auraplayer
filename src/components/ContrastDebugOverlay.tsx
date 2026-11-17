@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { contrastRatio, parseHex } from '../color/contrast';
 
 type Pair = { label: string; text: string; foreground: string; background: string; ratio: number };
+type SceneInfo = { trackKey: string; scene: string; step: string; palette: string[] };
 
 function cssHex(value: string): string | null {
   const match = value.match(/rgba?\(([^)]+)\)/i);
@@ -56,7 +57,7 @@ function inspectTextPairs(): Pair[] {
   return pairs.sort((a, b) => a.ratio - b.ratio);
 }
 
-export function ContrastDebugOverlay() {
+export function ContrastDebugOverlay({ sceneInfo }: { sceneInfo?: SceneInfo }) {
   const [open, setOpen] = useState(false);
   const [pairs, setPairs] = useState<Pair[]>([]);
   useEffect(() => {
@@ -77,6 +78,12 @@ export function ContrastDebugOverlay() {
     <aside className="contrast-debug" aria-label="Development contrast report">
       <header><b>CONTRAST REPORT / {pairs.length}</b><button onClick={() => setOpen(false)} aria-label="Close contrast report">×</button></header>
       <p>Computed text and nearest solid background pairs. WCAG AA target: 4.5:1.</p>
+      {sceneInfo && <section className="scene-debug-info" aria-label="Scene resolution diagnostics">
+        <b>SCENE RESOLUTION</b>
+        <code>TRACK / {sceneInfo.trackKey || 'IDLE'}</code>
+        <code>{sceneInfo.scene} · VIA {sceneInfo.step.toUpperCase()}</code>
+        <code>PALETTE / {sceneInfo.palette.join(' · ') || 'PRESET'}</code>
+      </section>}
       <div className="contrast-debug-list">
         {pairs.map((pair, index) => <div key={`${pair.label}-${index}`} className={pair.ratio < 4.5 ? 'is-failing' : ''}>
           <strong>{pair.text}</strong><small>{pair.label}</small><code>{pair.foreground} on {pair.background} · {pair.ratio.toFixed(2)}:1</code>

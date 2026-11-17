@@ -21,7 +21,7 @@ export type AuthData = {
   expires_at: number;
 };
 
-export type CallbackResult = { success: boolean; error?: string; statusCode?: number; responseBody?: string };
+export type CallbackResult = { success: boolean; error?: string; statusCode?: number; responseBody?: string; authenticated?: boolean };
 export class SpotifyAuthHttpError extends Error {
   constructor(readonly statusCode: number, readonly responseBody: string, message: string) {
     super(message);
@@ -239,7 +239,7 @@ export function handleCallback(): Promise<CallbackResult> {
         expires_at: Date.now() + data.expires_in * 1000
       });
       clearPendingAuth();
-      return { success: true };
+      return { success: true, authenticated: true };
     } catch (error) {
       clearPendingAuth();
       return {

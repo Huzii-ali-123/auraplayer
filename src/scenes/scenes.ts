@@ -1,6 +1,7 @@
 import type { Track } from '../player/types';
 import { buildPalette } from '../color/palette';
 import type { Palette } from '../color/palette';
+import type { PaletteSeeds } from '../color/palette';
 import { songMap, songPaletteMap } from './songMap';
 
 export type SceneKey =
@@ -46,6 +47,7 @@ export type Scene = {
   motionName?: string;
   revision?: string;
   palette?: Palette;
+  resolutionStep?: 'songMap' | 'lyric keywords' | 'title keywords' | 'genre' | 'palette fallback' | 'idle';
 };
 
 export const scenes: Scene[] = [
@@ -182,16 +184,26 @@ export function hashTrackId(id: string = ''): number {
   return hash;
 }
 
-function forTrack(scene: Scene, track: Track, dominant?: [string, string, string]): Scene {
-  const trackId = track ? `${track.source}:${track.id}` : 'default_track_id';
-  const hash = hashTrackId(trackId);
+function trackKey(track: Track): string {
+  const key = track.source && track.id ? `${track.source}:${track.id}` : '';
+  if (!key && import.meta.env.DEV) console.warn('[AuraPlayer] Scene resolution skipped a missing normalized track key.', track);
+  return key;
+}
+
+function paletteOverride(track: Track): PaletteSeeds | undefined {
+  return songPaletteMap[track.source === 'youtube' ? `youtube:${track.id}` : track.id];
+}
+
+function forTrack(scene: Scene, track: Track, dominant: [string, string, string] | undefined, resolutionStep: NonNullable<Scene['resolutionStep']>): Scene {
+  const key = trackKey(track);
+  const hash = hashTrackId(key);
   const variantIndex = hash % 4;
   const palette = buildPalette(dominant, {
     bg: scene.background,
     surface: scene.colors[1],
     accent: scene.colors[2],
     accent2: scene.colors[3]
-  }, songPaletteMap[track.source === 'youtube' ? `youtube:${track.id}` : track.id]);
+  }, paletteOverride(track));
 
   return {
     ...scene,
@@ -201,7 +213,8 @@ function forTrack(scene: Scene, track: Track, dominant?: [string, string, string
     palette,
     motionVariant: variantIndex,
     motionName: scene.variants?.[variantIndex] || scene.variants[0],
-    revision: trackId
+    revision: key,
+    resolutionStep
   };
 }
 
@@ -211,8 +224,9 @@ export function resolveScene(
   dominant?: [string, string, string],
   lyricText?: string
 ): Scene {
-  if (!track) return byKey('stars')!;
+  if (!track) return { ...byKey('stars')!, resolutionStep: 'idle' };
 
+  const key = trackKey(track);
   const trackId = track.id || '';
   const curatedKey = track.source === 'youtube' ? `youtube:${trackId}` : trackId;
 
@@ -220,7 +234,7 @@ export function resolveScene(
   if (trackId) {
     const mapped = songMap[curatedKey];
     if (mapped && byKey(mapped)) {
-      return forTrack(byKey(mapped)!, track, dominant);
+      return forTrack(byKey(mapped)!, track, dominant, 'songMap');
     }
   }
 
@@ -229,7 +243,7 @@ export function resolveScene(
     const lowerLyrics = lyricText.toLowerCase();
     for (const scene of scenes) {
       if (scene.keywords.some(word => lowerLyrics.includes(word))) {
-        return forTrack(scene, track, dominant);
+        return forTrack(scene, track, dominant, 'lyric keywords');
       }
     }
   }
@@ -242,23 +256,23 @@ export function resolveScene(
 
   for (const scene of scenes) {
     if (scene.keywords.some(word => text.includes(word))) {
-      return forTrack(scene, track, dominant);
+      return forTrack(scene, track, dominant, 'title keywords');
     }
   }
 
   // 4. Artist genre
   const genre = Array.isArray(genres) ? genres.join(' ').toLowerCase() : '';
-  if (/metal|rock|punk|hardcore/.test(genre)) return forTrack(byKey('ember')!, track, dominant);
-  if (/electronic|dance|edm|techno|synth/.test(genre)) return forTrack(byKey('neon')!, track, dominant);
-  if (/ambient|classical|folk|acoustic|chill/.test(genre)) return forTrack(byKey('snow')!, track, dominant);
-  if (/reggae|tropical|soul|surf/.test(genre)) return forTrack(byKey('ocean')!, track, dominant);
-  if (/hip hop|rap|trap|r&b/.test(genre)) return forTrack(byKey('thunder')!, track, dominant);
-  if (/psychedelic|space|prog/.test(genre)) return forTrack(byKey('space')!, track, dominant);
-  if (/latin|flamenco|afro/.test(genre)) return forTrack(byKey('desert')!, track, dominant);
+  if (/metal|rock|punk|hardcore/.test(genre)) return forTrack(byKey('ember')!, track, dominant, 'genre');
+  if (/electronic|dance|edm|techno|synth/.test(genre)) return forTrack(byKey('neon')!, track, dominant, 'genre');
+  if (/ambient|classical|folk|acoustic|chill/.test(genre)) return forTrack(byKey('snow')!, track, dominant, 'genre');
+  if (/reggae|tropical|soul|surf/.test(genre)) return forTrack(byKey('ocean')!, track, dominant, 'genre');
+  if (/hip hop|rap|trap|r&b/.test(genre)) return forTrack(byKey('thunder')!, track, dominant, 'genre');
+  if (/psychedelic|space|prog/.test(genre)) return forTrack(byKey('space')!, track, dominant, 'genre');
+  if (/latin|flamenco|afro/.test(genre)) return forTrack(byKey('desert')!, track, dominant, 'genre');
 
   // 5. Album-art dominant colors fallback
   const colors = dominant || [];
-  const hash = hashTrackId(trackId);
+  const hash = hashTrackId(key);
   const variantIndex = hash % 4;
   const artVariants: [string, string, string, string] = [
     'SPECTRUM DRIFT',
@@ -269,7 +283,7 @@ export function resolveScene(
 
   const palette = buildPalette(colors, {
     bg: '#ED704F', surface: '#F6F0DD', accent: '#253B58', accent2: '#F3C43A'
-  }, songPaletteMap[trackId]);
+  }, paletteOverride(track));
 
   return {
     key: 'art',
@@ -283,6 +297,7 @@ export function resolveScene(
     variants: artVariants,
     motionVariant: variantIndex,
     motionName: artVariants[variantIndex],
-    revision: trackId
+    revision: key,
+    resolutionStep: 'palette fallback'
   };
 }

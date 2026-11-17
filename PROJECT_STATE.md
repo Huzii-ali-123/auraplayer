@@ -1,8 +1,8 @@
 # AURA//PLAYER — Codebase Audit & Project State
 
-**Updated:** 2026-11-16
+**Updated:** 2026-11-17
 **Author:** Antigravity
-**Status:** Spotify playback, song palettes, synchronized lyrics, related-track queueing, responsive player, and installable PWA.
+**Status:** Spotify and YouTube video playback, per-track palettes/scenes, synchronized lyrics, source-exclusive queues, responsive player, and installable PWA.
 
 > **Local development URL:** Always open `http://127.0.0.1:5173/`, never `localhost`. Vite binds this exact IPv4 host and port; the entry page redirects `localhost:5173` to the canonical origin before auth starts.
 
@@ -35,8 +35,8 @@
 
 ```
 music-player/
-├── .env                         # Local environment variables (Spotify & Last.fm)
-├── .env.example                 # Template with VITE_LASTFM_API_KEY
+├── .env                         # Local environment variables (Spotify, Last.fm, optional YouTube Data API)
+├── .env.example                 # Environment template
 ├── index.html                   # HTML entry with Space Grotesk & Space Mono fonts
 ├── package.json                 # Dependencies
 ├── vite.config.ts               # Bundler config
@@ -155,3 +155,34 @@ Run `npm test` for the contrast utility checks, the 20-color suite (including pu
 | SoundCloud | Not integrated | Official API exists; needs app access and track-aware streaming/refresh handling. |
 | YouTube Music | Unavailable as an account integration | Official YouTube video embeds are distinct from YouTube Music. |
 | YouTube videos | Fully integrated | Official Data API v3 search and persistent visible IFrame Player; public videos, no YouTube account login, local queue, and Google quota/key restrictions apply. |
+
+---
+
+## 7. Multi-Source Scene, Embed, and Connection Fixes (2026-11-17)
+
+### Root causes found
+
+1. **Per-song colors were discarded by a key mismatch.** Album art sampling used a `source:id` cache key, but the result was stored under the plain track ID. Scene resolution looked up the namespaced key, so it never received extracted colors and repeatedly used preset colors. The palette fallback also hashed only the raw ID, and an art failure used one static preset.
+2. **The YouTube card was unconditional.** `App.tsx` rendered `YouTubeSourceCard` in every mode, and its mount effect immediately created the IFrame player. The empty grid column and sticker therefore remained in Spotify mode.
+3. **Source selection was not a connection lifecycle.** The old `switchSource` only paused the other player and changed local React state. It did not destroy/disconnect that provider, and Zustand had no active-source or per-provider status. Fast clicks could overlap transitions.
+
+### Changes made
+
+- The normalized current track now lives in Zustand and drives scene resolution for both providers. Palette extraction, resolved scene revisions, fallback colors, and motion variants use `${source}:${id}`. Missing track IDs log a development warning.
+- Artwork sampling sets `crossOrigin="anonymous"`, retries through a fetched blob/object URL when possible, and derives a deterministic saturated fallback palette from the source-qualified track key when image/canvas access fails. YouTube titles and artist names are normalized before scene matching and LRCLIB requests.
+- The resolver records the winning step (`songMap`, lyric keywords, title keywords, genre, palette fallback, or idle). The existing `D` contrast overlay now also reports the track key, scene/step, and palette hex values.
+- The YouTube card mounts only while YouTube is active/connecting, animates with a GSAP transform/opacity reveal, and exits from layout when disconnected. Disconnect stops and destroys the iframe player; a generation guard prevents an in-flight API load from recreating a disconnected player.
+- Zustand now owns `activeSource`, each source's connection status, and `currentTrack`. Header and provider-hub controls share `connectSource`; transitions are serialized. Switching sources pauses and disconnects the other source, clears its current track/queue/playback state, and keeps a valid Spotify token in storage for an explicit reconnect. Reload restores YouTube only if it was last active and Spotify only if its stored token validates.
+
+### Verification and remaining manual checks
+
+- `npm run build` passes.
+- `npm test` passes all 7 existing contrast and YouTube metadata tests.
+- Not manually verified with five real tracks on each provider in this environment: that requires the owner’s Spotify Premium/allowlisted session, YouTube Data API key, and interactive playback. Use the `D` overlay to inspect per-track scene resolution and palette while testing. No other known implementation item remains from this fix request.
+
+### Files changed for this fix
+
+- `src/App.tsx`, `src/store/player.ts`, `src/auth/pkce.ts`
+- `src/scenes/scenes.ts`, `src/color/extract.ts`, `src/components/ContrastDebugOverlay.tsx`
+- `src/components/YouTubeSourceCard.tsx`, `src/youtube/source.ts`, `src/components/ConnectedServices.tsx`
+- `src/styles.css`, and this document

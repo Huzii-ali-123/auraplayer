@@ -5,13 +5,16 @@ import { providerCatalog } from '../providers/registry';
 type Props = {
   open: boolean;
   spotifyConnected: boolean;
-  youtubeConfigured: boolean;
+  youtubeConnected: boolean;
+  youtubeApiConfigured: boolean;
   onClose: () => void;
   onSpotifyConnect: () => void;
   onSpotifyDisconnect: () => void;
+  onYouTubeConnect: () => void;
+  onYouTubeDisconnect: () => void;
 };
 
-export function ConnectedServices({ open, spotifyConnected, youtubeConfigured, onClose, onSpotifyConnect, onSpotifyDisconnect }: Props) {
+export function ConnectedServices({ open, spotifyConnected, youtubeConnected, youtubeApiConfigured, onClose, onSpotifyConnect, onSpotifyDisconnect, onYouTubeConnect, onYouTubeDisconnect }: Props) {
   const dialog = useRef<HTMLElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -35,13 +38,13 @@ export function ConnectedServices({ open, spotifyConnected, youtubeConfigured, o
         <p className="services-intro">Each service has its own permissions and playback rules. Only a working integration is marked as connectable.</p>
         <div className="services-grid">
           {providerCatalog.map(provider => {
-            const connected = (provider.id === 'spotify' && spotifyConnected) || (provider.id === 'youtube-videos' && youtubeConfigured);
+            const connected = (provider.id === 'spotify' && spotifyConnected) || (provider.id === 'youtube-videos' && youtubeConnected);
             const ready = provider.integration === 'full';
             return <article className={`service-card ${connected ? 'is-connected' : ''}`} key={provider.id}>
               <div className="service-card-top">
                 <span className={`service-mark service-${provider.id}`}><Music2 size={18} /></span>
                 <span className={`service-status ${connected ? 'status-connected' : ''}`}>
-                  {provider.id === 'youtube-videos' && connected ? <><Check size={12} /> READY · NO LOGIN</> : connected ? <><Check size={12} /> CONNECTED</> : ready ? 'NOT CONNECTED' : provider.integration === 'not-available' ? 'UNAVAILABLE' : 'NOT INTEGRATED'}
+                  {provider.id === 'youtube-videos' && connected ? <><Check size={12} /> CONNECTED · NO LOGIN</> : connected ? <><Check size={12} /> CONNECTED</> : ready ? 'NOT CONNECTED' : provider.integration === 'not-available' ? 'UNAVAILABLE' : 'NOT INTEGRATED'}
                 </span>
               </div>
               <h3>{provider.name}</h3>
@@ -53,7 +56,10 @@ export function ConnectedServices({ open, spotifyConnected, youtubeConfigured, o
                   ? <button className="service-action" onClick={onSpotifyDisconnect}>DISCONNECT SPOTIFY</button>
                   : <button className="service-action" onClick={onSpotifyConnect}>CONNECT SPOTIFY <ExternalLink size={14} /></button>
               ) : provider.id === 'youtube-videos' ? (
-                <span className="service-unavailable-note">{youtubeConfigured ? 'SELECT YOUTUBE IN THE HEADER TO SEARCH AND PLAY.' : 'ADD VITE_YOUTUBE_API_KEY; THIS SOURCE DOES NOT NEED ACCOUNT LOGIN.'}</span>
+                <>
+                  <span className="service-unavailable-note">{youtubeApiConfigured ? 'PUBLIC VIDEO SEARCH IS READY; YOUTUBE DOES NOT NEED ACCOUNT LOGIN.' : 'ADD VITE_YOUTUBE_API_KEY TO ENABLE SEARCH; VIDEO EMBEDS DO NOT NEED ACCOUNT LOGIN.'}</span>
+                  <button className="service-action" onClick={connected ? onYouTubeDisconnect : onYouTubeConnect}>{connected ? 'DISCONNECT YOUTUBE' : 'CONNECT YOUTUBE'}</button>
+                </>
               ) : <span className="service-unavailable-note">{provider.integration === 'not-available' ? 'NOT AN AVAILABLE ACCOUNT CONNECTION' : 'INTEGRATION REQUIRED BEFORE CONNECTING'}</span>}
             </article>;
           })}

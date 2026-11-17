@@ -2220,6 +2220,19 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   padding-top: 6px;
 }
 
+.scene-debug-info {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  margin: 8px 0;
+  background: var(--surface, #f6f0dd);
+  border: 2px solid #111;
+  box-shadow: 3px 3px 0 #111;
+  color: var(--on-surface, #111);
+}
+.scene-debug-info b,
+.scene-debug-info code { font: 700 9px/1.35 var(--mono); overflow-wrap: anywhere; }
+
 .error-stack-details summary {
   font: 9px var(--mono);
   font-weight: 800;
@@ -2792,7 +2805,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 /* Two-provider source strip and visible, policy-sized YouTube embed. */
 @media (min-width: 1051px) {
-  .hero-editorial-grid { grid-template-columns: minmax(250px, .82fr) minmax(220px, .72fr) minmax(360px, 1.16fr); }
+  .hero-editorial-grid.has-youtube-source { grid-template-columns: minmax(250px, .82fr) minmax(220px, .72fr) minmax(360px, 1.16fr); }
 }
 .source-switcher { display: inline-flex; flex: 0 0 auto; overflow: hidden; background: var(--surface); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); }
 .source-switcher button { min-height: 34px; padding: 0 8px; background: transparent; color: var(--on-surface); border: 0; font: 8px var(--mono); font-weight: 800; white-space: nowrap; }

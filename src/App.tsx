@@ -10,7 +10,6 @@ import {
   LibraryBig,
   ListMusic,
   Music2,
-  LogOut,
   RotateCcw,
   Search,
   X
@@ -28,6 +27,7 @@ import { resolveScene, scenes } from './scenes/scenes';
 import type { Scene } from './scenes/scenes';
 import { buildPalette } from './color/palette';
 import { extractAlbumColors } from './color/extract';
+import { cleanVideoMetadata } from './youtube/cleanTitle';
 import { ContrastDebugOverlay } from './components/ContrastDebugOverlay';
 import { SceneCanvas } from './components/SceneCanvas';
 import { WipeTransition } from './components/WipeTransition';
@@ -120,16 +120,12 @@ function HeroArtwork({ track }: { track: Track | null }) {
 }
 
 export default function App() {
-  const { token, set, playlists: cachedPlaylists } = usePlayer();
-  const [source, setSource] = useState<SourceId>(() => {
-    try { return localStorage.getItem('auraplayer_source') === 'youtube' ? 'youtube' : 'spotify'; }
-    catch { return 'spotify'; }
-  });
-  const sourceRef = useRef<SourceId>(source);
+  const { token, set, playlists: cachedPlaylists, activeSource, connections, currentTrack: track } = usePlayer();
+  const source: SourceId = activeSource || 'spotify';
+  const sourceRef = useRef<SourceId | null>(activeSource);
   const [authError, setAuthError] = useState<string | null>(null);
   const [spotifyAccessLimited, setSpotifyAccessLimited] = useState(false);
   const [device, setDevice] = useState('');
-  const [track, setTrack] = useState<Track | null>(null);
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
   const activeTrackId = useRef('');
@@ -143,7 +139,6 @@ export default function App() {
   if (!spotifySource.current) {
     spotifySource.current = new SpotifySource(() => player.current, () => deviceRef.current, () => progressRef.current);
   }
-  const [youtubeReady, setYoutubeReady] = useState(false);
   const [youtubeError, setYoutubeError] = useState('');
   const [youtubeQuota, setYoutubeQuota] = useState(getYouTubeQuota);
   const youtubeSourceRef = useRef<YouTubeSource | null>(null);
@@ -188,6 +183,8 @@ export default function App() {
     accent2: scenes[3].colors[3]
   }), []);
   const noticeTimer = useRef<number>();
+  const disconnectSourceRef = useRef<(target: SourceId) => Promise<void>>(async () => {});
+  const sourceTransitionRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const promptInstall = (event: Event) => {
@@ -220,7 +217,7 @@ export default function App() {
     });
   }, []);
 
-  sourceRef.current = source;
+  sourceRef.current = activeSource;
   deviceRef.current = device;
   activeTrackId.current = track?.id || '';
 
@@ -269,6 +266,7 @@ export default function App() {
         setSpotifyAccessLimited(true);
         setAuthError(null);
         set({ error: error instanceof Error ? error.message : 'Spotify access is limited to allowlisted accounts.', loading: false });
+        if (usePlayer.getState().activeSource === 'spotify') void disconnectSourceRef.current('spotify');
         return;
       }
       const message = error instanceof Error ? error.message : 'AuraPlayer could not complete that request.';
@@ -284,15 +282,17 @@ export default function App() {
     if (!next) {
       activeTrackId.current = '';
       currentTrackRef.current = null;
-      setTrack(null);
+      set({ currentTrack: null });
       return;
     }
     // Ensure all fields have safe defaults
+    const youtubeMetadata = next.source === 'youtube' ? cleanVideoMetadata(next.title || '', next.artist || '') : null;
     const safeTrack: Track = {
       id: next.id || '', source: next.source, title: next.title || 'Unknown Track',
       artist: next.artist || 'Unknown Artist', album: next.album || '',
       durationMs: next.durationMs || 0, artworkUrl: next.artworkUrl || '',
-      uri: next.uri || '', artistId: next.artistId, videoId: next.videoId
+      uri: next.uri || '', artistId: next.artistId, videoId: next.videoId,
+      ...(youtubeMetadata ? { title: youtubeMetadata.title, artist: youtubeMetadata.artist } : {})
     };
     if (skipInFlight.current && safeTrack.id !== activeTrackId.current) {
       window.clearTimeout(skipReleaseTimer.current);
@@ -304,7 +304,7 @@ export default function App() {
     }
     activeTrackId.current = safeTrack.id;
     currentTrackRef.current = safeTrack;
-    setTrack(safeTrack);
+    set({ currentTrack: safeTrack });
     try { localStorage.setItem(`auraplayer_track_${safeTrack.source}`, JSON.stringify(safeTrack)); } catch { /* local storage may be disabled */ }
     if (safeTrack.uri && safeTrack.source === 'spotify') {
       autoplayEngine.markTrackPlayed(safeTrack.uri);
@@ -330,21 +330,33 @@ export default function App() {
     const offSpotify = spotifySource.current?.onStateChange(applySourceState('spotify'));
     const offYouTube = youtubeSource.onStateChange(applySourceState('youtube'));
     youtubeSource.setCallbacks({
-      onReady: () => setYoutubeReady(true),
+      onReady: () => {
+        const current = usePlayer.getState();
+        if (current.activeSource === 'youtube') {
+          set({ connections: { ...current.connections, youtube: 'connected' } });
+        }
+      },
       onEnded: () => { void commandRef.current('next'); },
       onError: () => { void commandRef.current('next'); },
       onNext: () => { void commandRef.current('next'); },
       onPrevious: () => { void commandRef.current('previous'); }
     });
     return () => { offSpotify?.(); offYouTube(); };
-  }, [youtubeSource]);
+  }, [youtubeSource, set]);
 
   useEffect(() => {
+    if (!activeSource || connections[activeSource] !== 'connected') return;
     try {
       const savedTrack = localStorage.getItem(`auraplayer_track_${source}`);
       if (savedTrack) {
         const parsed = JSON.parse(savedTrack) as Track;
-        if (parsed?.source === source && parsed.id) commitTrack(parsed);
+        if (parsed?.source === source && parsed.id) {
+          commitTrack(parsed);
+          if (source === 'youtube') {
+            progressRef.current = { position: 0, duration: parsed.durationMs, updatedAt: performance.now(), playing: false };
+            void youtubeSource.cue(parsed).catch(announce);
+          }
+        }
       }
       const savedQueue = localStorage.getItem(`auraplayer_queue_${source}`);
       if (savedQueue) {
@@ -352,13 +364,12 @@ export default function App() {
         if (Array.isArray(parsed)) setQueue(parsed.filter(item => item?.source === source));
       }
     } catch { /* ignore invalid saved player state */ }
-  // Restore the last selection once, before live SDK state replaces it.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeSource, connections, source, commitTrack, youtubeSource, announce]);
 
   useEffect(() => {
-    try { localStorage.setItem(`auraplayer_queue_${source}`, JSON.stringify(queue)); } catch { /* storage may be disabled */ }
-  }, [queue, source]);
+    if (!activeSource) return;
+    try { localStorage.setItem(`auraplayer_queue_${activeSource}`, JSON.stringify(queue)); } catch { /* storage may be disabled */ }
+  }, [queue, activeSource]);
 
   const updatePlayback = (state: Playback | null) => {
     if (sourceRef.current !== 'spotify') return;
@@ -496,8 +507,14 @@ export default function App() {
         if (!callbackResult.success && callbackResult.error) {
           if (callbackResult.statusCode === 403) {
             setSpotifyAccessLimited(true);
+            const current = usePlayer.getState();
+            set({ activeSource: null, connections: { ...current.connections, spotify: 'disconnected' } });
+            try { localStorage.removeItem('auraplayer_active_source'); } catch { /* storage may be disabled */ }
             return;
           }
+          const current = usePlayer.getState();
+          set({ activeSource: null, connections: { ...current.connections, spotify: 'disconnected' } });
+          try { localStorage.removeItem('auraplayer_active_source'); } catch { /* storage may be disabled */ }
           setAuthError(callbackResult.error);
           announce(callbackResult.error);
           return;
@@ -506,8 +523,17 @@ export default function App() {
         const access = await validToken();
         if (!mounted) return;
         if (!access) return;
-
-        set({ token: access });
+        let savedSource = '';
+        try { savedSource = localStorage.getItem('auraplayer_active_source') || ''; } catch { /* storage may be disabled */ }
+        // A valid saved token alone is not consent to auto-connect. Only restore
+        // Spotify after a completed callback or an explicit prior Spotify session.
+        if (!callbackResult.authenticated && savedSource !== 'spotify') return;
+        set({
+          token: access,
+          activeSource: 'spotify',
+          connections: { ...usePlayer.getState().connections, spotify: 'connecting', youtube: 'disconnected' }
+        });
+        try { localStorage.setItem('auraplayer_active_source', 'spotify'); } catch { /* storage may be disabled */ }
         setAuthError(null);
 
         // Fetch playlists non-fatally so playlist issues never crash authentication
@@ -534,6 +560,15 @@ export default function App() {
     };
   }, [announce, set]);
 
+  // Restore YouTube only when it was the user's last explicitly active source.
+  useEffect(() => {
+    try {
+      if (localStorage.getItem('auraplayer_active_source') !== 'youtube') return;
+      set({ activeSource: 'youtube', connections: { ...usePlayer.getState().connections, youtube: 'connecting' } });
+    } catch { /* storage may be disabled */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Safe genres lookup
   useEffect(() => {
     const artistId = track?.source === 'spotify' ? track.artistId : undefined;
@@ -556,12 +591,14 @@ export default function App() {
   // Safe dominant color sampling
   useEffect(() => {
     setDominant(null);
+    if (!track) return;
+    const key = `${track.source}:${track.id}`;
+    if (!track.id && import.meta.env.DEV) console.warn('[AuraPlayer] Missing normalized source:id key; using a safe palette fallback.', track);
     const url = track?.artworkUrl;
-    if (!url) return;
     let stale = false;
-    void extractAlbumColors(`${track?.source || 'spotify'}:${track?.id || url}`, url).then(colors => {
+    void extractAlbumColors(key, url || '').then(colors => {
       if (!stale && colors.length) setDominant({
-        trackId: track?.id || url,
+        trackId: key,
         colors: [colors[0] || '', colors[1] || '', colors[2] || '']
       });
     });
@@ -579,7 +616,7 @@ export default function App() {
       if (!controller.signal.aborted) setLyrics(result);
     }).catch(() => {});
     return () => controller.abort();
-  }, [track?.id, track?.source]);
+  }, [track?.id, track?.source, track?.title, track?.artist, track?.durationMs]);
 
   // Autoplay Trigger on Track Change
   useEffect(() => {
@@ -641,6 +678,10 @@ export default function App() {
       instance.addListener('ready', async ({ device_id }: any) => {
         if (!alive) return;
         setDevice(device_id);
+        const current = usePlayer.getState();
+        if (current.activeSource === 'spotify') {
+          set({ connections: { ...current.connections, spotify: 'connected' } });
+        }
         try {
           if (sourceRef.current === 'spotify') {
             await spotify('/me/player', {
@@ -656,7 +697,14 @@ export default function App() {
         }
       });
 
-      instance.addListener('not_ready', () => setDevice(''));
+      instance.addListener('not_ready', () => {
+        setDevice('');
+        const current = usePlayer.getState();
+        if (current.activeSource === 'spotify') {
+          set({ activeSource: null, connections: { ...current.connections, spotify: 'disconnected' } });
+          try { localStorage.removeItem('auraplayer_active_source'); } catch { /* storage may be disabled */ }
+        }
+      });
       instance.addListener('initialization_error', ({ message }: any) =>
         announce(new Error(message))
       );
@@ -911,14 +959,6 @@ export default function App() {
     setNotice('Upcoming queue cleared.');
   };
 
-  const connect = async () => {
-    try {
-      await spotifyProvider.connect();
-    } catch (error) {
-      announce(error);
-    }
-  };
-
   const closeLibrary = () => {
     setSearchOpen(false);
     setPlaylistOpen(false);
@@ -946,42 +986,106 @@ export default function App() {
     }
   };
 
-  const switchSource = async (next: SourceId) => {
-    if (next === sourceRef.current) return;
-    const previous = sourceRef.current;
+  const performDisconnectSource = async (target: SourceId) => {
+    const current = usePlayer.getState();
+    const clearTargetState = current.activeSource === target || track?.source === target || current.connections[target] !== 'disconnected';
+    if (target === 'spotify') {
+      if (current.activeSource === 'spotify' && (token || player.current)) {
+        try { await spotifySource.current?.pause(); } catch { /* still disconnect the local device */ }
+      }
+      player.current?.disconnect();
+      player.current = null;
+      setDevice('');
+      // Keep a still-valid persisted token so an explicit reconnect can skip OAuth.
+      await validToken().catch(() => null);
+    } else {
+      if (current.activeSource === 'youtube' && youtubeSource.hasMedia()) {
+        try { await youtubeSource.pause(); } catch { /* still stop and destroy the iframe */ }
+      }
+      await youtubeSource.stopAndDestroy();
+    }
+
+    if (clearTargetState) {
+      playingRef.current = false;
+      setPlaying(false);
+      progressRef.current = emptyProgress();
+      commitTrack(null);
+      setLyrics(null);
+      setGenres([]);
+      setDominant(null);
+      setQueue([]);
+      autoplayEngine.clearQueueTracking();
+    }
+    if (clearTargetState) {
+      try {
+        localStorage.removeItem(`auraplayer_track_${target}`);
+        localStorage.removeItem(`auraplayer_queue_${target}`);
+      } catch { /* storage may be disabled */ }
+    }
+    const latest = usePlayer.getState();
+    set({
+      token: target === 'spotify' ? null : latest.token,
+      playback: target === 'spotify' ? null : latest.playback,
+      activeSource: latest.activeSource === target ? null : latest.activeSource,
+      connections: { ...latest.connections, [target]: 'disconnected' }
+    });
     try {
-      if (previous === 'spotify' && (token || player.current)) await spotifySource.current?.pause();
-      if (previous === 'youtube' && youtubeReady) await youtubeSource.pause();
-    } catch { /* source switch should still complete if the provider is already unavailable */ }
-    sourceRef.current = next;
-    playingRef.current = false;
-    setPlaying(false);
-    progressRef.current = emptyProgress();
-    setSource(next);
+      if (usePlayer.getState().activeSource === null) localStorage.removeItem('auraplayer_active_source');
+    } catch { /* storage may be disabled */ }
+    setYoutubeError('');
+  };
+
+  const enqueueSourceTransition = (operation: () => Promise<void>) => {
+    const next = sourceTransitionRef.current.then(operation, operation);
+    sourceTransitionRef.current = next.then(() => undefined, () => undefined);
+    return next;
+  };
+  const disconnectSource = (target: SourceId) => enqueueSourceTransition(() => performDisconnectSource(target));
+  disconnectSourceRef.current = disconnectSource;
+
+  const connectSource = (requested: SourceId) => enqueueSourceTransition(async () => {
+    const current = usePlayer.getState();
+    if (current.activeSource === requested && current.connections[requested] !== 'disconnected') {
+      await performDisconnectSource(requested);
+      return;
+    }
+    await performDisconnectSource(requested === 'spotify' ? 'youtube' : 'spotify');
+    const latest = usePlayer.getState();
+    sourceRef.current = requested;
     setQuery('');
     setSubmittedQuery('');
     setResults([]);
     setPlaylistOpen(false);
     setYoutubeError('');
+    setQueue([]);
+    playingRef.current = false;
+    setPlaying(false);
+    progressRef.current = emptyProgress();
+    set({
+      activeSource: requested,
+      connections: { ...latest.connections, [requested]: 'connecting' }
+    });
+    try { localStorage.setItem('auraplayer_active_source', requested); } catch { /* storage may be disabled */ }
+
+    if (requested === 'youtube') {
+      return;
+    }
     try {
-      localStorage.setItem('auraplayer_source', next);
-      const savedQueue = JSON.parse(localStorage.getItem(`auraplayer_queue_${next}`) || '[]') as QueueTrack[];
-      setQueue(Array.isArray(savedQueue) ? savedQueue.filter(item => item?.source === next) : []);
-      const savedTrack = JSON.parse(localStorage.getItem(`auraplayer_track_${next}`) || 'null') as Track | null;
-      commitTrack(savedTrack?.source === next ? savedTrack : null);
-      if (next === 'youtube' && savedTrack?.source === 'youtube') {
-        progressRef.current = { position: 0, duration: savedTrack.durationMs, updatedAt: performance.now(), playing: false };
-        void youtubeSource.cue(savedTrack).catch(announce);
+      const access = await validToken();
+      if (access) {
+        set({ token: access });
+        return;
       }
-      if (next === 'spotify' && token && device) {
-        await spotify('/me/player', { method: 'PUT', body: JSON.stringify({ device_ids: [device], play: false }) });
-        await fetchInitialState();
-        await loadQueue();
-      }
+      await spotifyProvider.connect();
     } catch (error) {
+      const failed = usePlayer.getState();
+      set({ activeSource: null, connections: { ...failed.connections, spotify: 'disconnected' } });
+      try { localStorage.removeItem('auraplayer_active_source'); } catch { /* storage may be disabled */ }
       announce(error);
     }
-  };
+  });
+
+  const connect = () => connectSource('spotify');
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1028,17 +1132,17 @@ export default function App() {
           <div className="error-actions-row">
             <button
               className="error-reset-btn"
-              onClick={() => {
+              onClick={() => void (async () => {
                 spotifyProvider.disconnect();
                 setAuthError(null);
-                set({ token: null });
-                void connect();
-              }}
+                await disconnectSource('spotify');
+                await connect();
+              })()}
             >
               <RotateCcw size={16} />
               <span>TRY AGAIN</span>
             </button>
-            <button className="error-reload-btn" onClick={connect}>
+            <button className="error-reload-btn" onClick={() => void connect()}>
               <RotateCcw size={16} />
               <span>RECONNECT SPOTIFY ↗</span>
             </button>
@@ -1059,15 +1163,15 @@ export default function App() {
             <button className="error-reload-btn" onClick={() => {
               setSpotifyAccessLimited(false);
               setAuthError(null);
-              void switchSource('youtube');
+              void connectSource('youtube');
             }}>SWITCH TO YOUTUBE</button>
-            <button className="error-reset-btn" onClick={() => {
+            <button className="error-reset-btn" onClick={() => void (async () => {
               spotifyProvider.disconnect();
               setSpotifyAccessLimited(false);
               setAuthError(null);
-              set({ token: null });
-              void connect();
-            }}>TRY AGAIN</button>
+              await disconnectSource('spotify');
+              await connect();
+            })()}>TRY AGAIN</button>
           </div>
         </section>
       </main>
@@ -1106,8 +1210,12 @@ export default function App() {
         <span className="mast-sticker">SCENE ENGINE / LIVE</span>
         <div className="mast-actions">
           <div className="source-switcher" role="tablist" aria-label="Music source">
-            <button role="tab" aria-selected={source === 'spotify'} className={source === 'spotify' ? 'is-active' : ''} onClick={() => void switchSource('spotify')}>SPOTIFY</button>
-            <button role="tab" aria-selected={source === 'youtube'} className={source === 'youtube' ? 'is-active' : ''} onClick={() => void switchSource('youtube')}>YOUTUBE</button>
+            <button role="tab" aria-selected={activeSource === 'spotify'} className={activeSource === 'spotify' ? 'is-active' : ''} onClick={() => void connectSource('spotify')}>
+              {activeSource === 'spotify' ? 'SPOTIFY / DISCONNECT' : connections.spotify === 'connecting' ? 'SPOTIFY / CONNECTING' : 'CONNECT SPOTIFY'}
+            </button>
+            <button role="tab" aria-selected={activeSource === 'youtube'} className={activeSource === 'youtube' ? 'is-active' : ''} onClick={() => void connectSource('youtube')}>
+              {activeSource === 'youtube' ? 'YOUTUBE / DISCONNECT' : connections.youtube === 'connecting' ? 'YOUTUBE / CONNECTING' : 'CONNECT YOUTUBE'}
+            </button>
           </div>
           <button className="quick-library-btn" onClick={openSearch} aria-label={`Search ${source === 'youtube' ? 'YouTube' : 'Spotify'}`} title={`Search ${source === 'youtube' ? 'YouTube videos' : 'Spotify tracks'}`}>
             <Search size={14} /><span>SEARCH</span>
@@ -1131,26 +1239,9 @@ export default function App() {
             <ListMusic size={14} /> PLAY ORDER ({queue.length})
           </button>
           <span className="device-state">
-            <i className={(source === 'spotify' ? device : youtubeReady) ? 'online' : ''} />
-            {source === 'spotify' ? (device ? 'SPOTIFY READY' : 'SPOTIFY OFFLINE') : (youtubeReady ? 'YOUTUBE READY' : 'YOUTUBE LOADING')}
+            <i className={connections[source] === 'connected' ? 'online' : ''} />
+            {activeSource ? `${source.toUpperCase()} ${connections[source].toUpperCase()}` : 'NO SOURCE CONNECTED'}
           </span>
-          {source === 'spotify' && token ? (
-            <button
-              className="sign-button"
-              onClick={() => {
-                spotifyProvider.disconnect();
-                player.current?.disconnect();
-                set({ token: null });
-                setDevice('');
-              }}
-            >
-              <LogOut size={15} /> DISCONNECT
-            </button>
-          ) : source === 'spotify' ? (
-            <button className="sign-button" onClick={connect}>
-              <span className="spotify-glyph">●</span> CONNECT SPOTIFY <ArrowUpRight size={15} />
-            </button>
-          ) : <span className="source-no-login">YOUTUBE · NO LOGIN</span>}
         </div>
       </header>
 
@@ -1164,7 +1255,7 @@ export default function App() {
           </span>
         </div>
 
-        <div className="hero-editorial-grid">
+        <div className={`hero-editorial-grid ${activeSource === 'youtube' && connections.youtube !== 'disconnected' ? 'has-youtube-source' : ''}`}>
           <div className="hero-art-column">
             <HeroArtwork track={track} />
             <div className="hero-facts">
@@ -1173,7 +1264,11 @@ export default function App() {
               <span>RUNTIME</span><strong>{track?.durationMs ? fmt(track.durationMs) : '0:00'}</strong>
             </div>
           </div>
-          <YouTubeSourceCard source={youtubeSource} error={youtubeError} />
+          <YouTubeSourceCard
+            source={youtubeSource}
+            active={activeSource === 'youtube' && connections.youtube !== 'disconnected'}
+            error={youtubeError}
+          />
           <div className="hero-copy-column">
             <TrackStamp track={track} />
             <div className="hero-song-meta">
@@ -1245,19 +1340,23 @@ export default function App() {
       />
       <ConnectedServices
         open={servicesOpen}
-        spotifyConnected={Boolean(token)}
-        youtubeConfigured={Boolean(import.meta.env.VITE_YOUTUBE_API_KEY)}
+        spotifyConnected={connections.spotify === 'connected'}
+        youtubeConnected={connections.youtube === 'connected'}
+        youtubeApiConfigured={Boolean(import.meta.env.VITE_YOUTUBE_API_KEY)}
         onClose={() => setServicesOpen(false)}
-        onSpotifyConnect={() => { setServicesOpen(false); void connect(); }}
-        onSpotifyDisconnect={() => {
-          spotifyProvider.disconnect();
-          player.current?.disconnect();
-          set({ token: null });
-          setDevice('');
-          setServicesOpen(false);
-        }}
+        onSpotifyConnect={() => { setServicesOpen(false); void connectSource('spotify'); }}
+        onSpotifyDisconnect={() => { void disconnectSource('spotify'); setServicesOpen(false); }}
+        onYouTubeConnect={() => { setServicesOpen(false); void connectSource('youtube'); }}
+        onYouTubeDisconnect={() => { void disconnectSource('youtube'); setServicesOpen(false); }}
       />
-      <ContrastDebugOverlay />
+      <ContrastDebugOverlay sceneInfo={{
+        trackKey: track ? `${track.source}:${track.id}` : '',
+        scene: targetScene.label,
+        step: targetScene.resolutionStep || 'idle',
+        palette: targetScene.palette
+          ? [targetScene.palette.bg, targetScene.palette.surface, targetScene.palette.accent, targetScene.palette.accent2, targetScene.palette.ink, targetScene.palette.paper]
+          : [targetScene.background, ...targetScene.colors]
+      }} />
 
       {/* Dedicated UP NEXT Queue Dock */}
       <UpNextQueue
