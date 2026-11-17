@@ -1,4 +1,4 @@
-import type { Track } from '../spotify/api';
+import type { Track } from '../player/types';
 
 export type LyricsRecord = {
   plainLyrics: string | null;
@@ -128,17 +128,18 @@ export function sampleLyricEnergy(lines: LyricLine[], positionMs: number): Lyric
 }
 
 export async function fetchLyrics(track: Track, signal?: AbortSignal): Promise<LyricsRecord | null> {
-  if (lyricsCache.has(track.id)) {
-    return lyricsCache.get(track.id) ?? null;
+  const cacheKey = `${track.source}:${track.id}`;
+  if (lyricsCache.has(cacheKey)) {
+    return lyricsCache.get(cacheKey) ?? null;
   }
   if (Date.now() < retryAfter) return null;
 
   const params = new URLSearchParams({
-    track_name: track.name,
-    artist_name: track.artists.map(a => a.name).join(', '),
-    duration: String(Math.max(1, Math.round(track.duration_ms / 1000)))
+    track_name: track.title,
+    artist_name: track.artist,
+    duration: String(Math.max(1, Math.round(track.durationMs / 1000)))
   });
-  if (track.album?.name) params.set('album_name', track.album.name);
+  if (track.album) params.set('album_name', track.album);
 
   try {
     const response = await fetch(`https://lrclib.net/api/get?${params}`, {
@@ -146,7 +147,7 @@ export async function fetchLyrics(track: Track, signal?: AbortSignal): Promise<L
       headers: { 'X-User-Agent': 'AURA//PLAYER/2.0' }
     });
     if (response.status === 404) {
-      lyricsCache.set(track.id, null);
+      lyricsCache.set(cacheKey, null);
       return null;
     }
     if (response.status === 429) {
@@ -158,10 +159,10 @@ export async function fetchLyrics(track: Track, signal?: AbortSignal): Promise<L
 
     const record = (await response.json()) as LyricsRecord;
     if (record.instrumental || (!record.syncedLyrics && !record.plainLyrics)) {
-      lyricsCache.set(track.id, null);
+      lyricsCache.set(cacheKey, null);
       return null;
     }
-    lyricsCache.set(track.id, record);
+    lyricsCache.set(cacheKey, record);
     return record;
   } catch (error) {
     if (signal?.aborted) return null;

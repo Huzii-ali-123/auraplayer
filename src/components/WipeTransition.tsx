@@ -20,8 +20,10 @@ export function WipeTransition({ scene, onSwap }: Props) {
       previousSignature.current = signature;
       if (reveal.current) gsap.set(reveal.current, { scaleX: 0, opacity: 1, transformOrigin: 'left center' });
       if (zipper.current) {
-        const width = zipper.current.getBoundingClientRect().width;
-        gsap.set(zipper.current, { xPercent: 0, x: -width - 24 });
+        const width = zipper.current.offsetWidth;
+        const tab = zipper.current.querySelector<HTMLElement>('.scene-zip-tab');
+        const visualRight = Math.max(width, (tab?.offsetLeft || 0) + (tab?.offsetWidth || 0));
+        gsap.set(zipper.current, { xPercent: 0, x: -visualRight - 24 });
       }
       swapRef.current(scene);
       return;
@@ -36,8 +38,10 @@ export function WipeTransition({ scene, onSwap }: Props) {
     // If a new track arrives mid-sweep, continue from the current reveal point
     // instead of snapping the old animation back to its starting position.
     let progress = Number(gsap.getProperty(revealElement, 'scaleX')) || 0;
-    const width = zipperElement.getBoundingClientRect().width;
-    const hiddenX = -width - 24;
+    const width = zipperElement.offsetWidth;
+    const tab = zipperElement.querySelector<HTMLElement>('.scene-zip-tab');
+    const visualRight = Math.max(width, (tab?.offsetLeft || 0) + (tab?.offsetWidth || 0));
+    const hiddenX = -visualRight - 24;
     if (progress >= 0.995) {
       progress = 0;
       gsap.set(revealElement, { scaleX: 0, opacity: 1 });
@@ -62,7 +66,7 @@ export function WipeTransition({ scene, onSwap }: Props) {
       ease: 'power1.inOut'
     }, 0);
     timeline.to(zipperElement, {
-      x: window.innerWidth + width + 24,
+      x: window.innerWidth + visualRight + 24,
       duration: sweepDuration,
       ease: 'power1.inOut'
     }, 0);

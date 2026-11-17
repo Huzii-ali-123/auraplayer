@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test tests/color.test.mjs"
+    "test": "node --test tests/color.test.mjs tests/youtube-clean-title.test.mjs"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

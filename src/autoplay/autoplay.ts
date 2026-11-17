@@ -1,7 +1,5 @@
 import { spotify } from '../spotify/api';
-import type { Track } from '../spotify/api';
-
-export type QueuedTrack = Track & { isAutoplay?: boolean };
+import type { SpotifyTrack } from '../spotify/api';
 
 class AutoplayEngine {
   private playedUris = new Set<string>();
@@ -9,7 +7,7 @@ class AutoplayEngine {
   private enabled = true;
   private isProcessing = false;
   private isContextPlay = false; // Set to true if playback is tied to an album or playlist context
-  private pending: Promise<Track[]> | null = null;
+  private pending: Promise<SpotifyTrack[]> | null = null;
 
   public isEnabled(): boolean {
     return this.enabled;
@@ -43,10 +41,10 @@ class AutoplayEngine {
    * Checks current queue length and tops up with Last.fm recommendations if < 5 tracks
    */
   public ensureAutoplay(
-    currentTrack: Track,
+    currentTrack: SpotifyTrack,
     deviceId: string,
-    existingQueue: Track[]
-  ): Promise<Track[]> {
+    existingQueue: SpotifyTrack[]
+  ): Promise<SpotifyTrack[]> {
     if (!this.enabled || this.isContextPlay || !deviceId || !currentTrack) {
       return Promise.resolve([]);
     }
@@ -59,10 +57,10 @@ class AutoplayEngine {
   }
 
   private async fillQueue(
-    currentTrack: Track,
+    currentTrack: SpotifyTrack,
     deviceId: string,
-    existingQueue: Track[]
-  ): Promise<Track[]> {
+    existingQueue: SpotifyTrack[]
+  ): Promise<SpotifyTrack[]> {
     if (!this.enabled || this.isContextPlay || !deviceId || !currentTrack) return [];
 
     // Filter upcoming tracks that are not already the current track
@@ -154,7 +152,7 @@ class AutoplayEngine {
       }
 
       const neededCount = Math.min(8 - upcoming.length, 8);
-      const resolvedTracks: Track[] = [];
+      const resolvedTracks: SpotifyTrack[] = [];
 
       for (const cand of candidates) {
         if (resolvedTracks.length >= neededCount) break;
@@ -164,7 +162,7 @@ class AutoplayEngine {
           : `artist:${cand.artist}`;
 
         try {
-          const searchRes = await spotify<{ tracks: { items: Track[] } }>(
+          const searchRes = await spotify<{ tracks: { items: SpotifyTrack[] } }>(
             `/search?type=track&limit=3&q=${encodeURIComponent(query)}`
           );
           const foundItems = searchRes?.tracks?.items || [];

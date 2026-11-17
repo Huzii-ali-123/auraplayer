@@ -7,15 +7,22 @@ import {
   AudioLines,
   Download,
   Headphones,
+  LibraryBig,
   ListMusic,
+  Music2,
   LogOut,
   RotateCcw,
   Search,
   X
 } from 'lucide-react';
-import { handleCallback, login, logout, validToken } from './auth/pkce';
-import { spotify } from './spotify/api';
-import type { Playback, Track } from './spotify/api';
+import { handleCallback, validToken } from './auth/pkce';
+import { spotify, SpotifyAccessLimitedError } from './spotify/api';
+import type { Playback, SpotifyTrack } from './spotify/api';
+import { fromSpotifyTrack, toSpotifyTrack, type Track, type QueueTrack, type SourceId } from './player/types';
+import { SpotifySource } from './player/source';
+import { searchYouTube, getYouTubeQuota } from './youtube/api';
+import { fillYouTubeQueue } from './youtube/autoplay';
+import { YouTubeSource } from './youtube/source';
 import { usePlayer } from './store/player';
 import { resolveScene, scenes } from './scenes/scenes';
 import type { Scene } from './scenes/scenes';
@@ -31,7 +38,9 @@ import type { LyricsRecord } from './lyrics/client';
 import { HeroLyrics } from './lyrics/HeroLyrics';
 import { UpNextQueue } from './components/UpNextQueue';
 import { autoplayEngine } from './autoplay/autoplay';
-import type { QueuedTrack } from './autoplay/autoplay';
+import { YouTubeSourceCard } from './components/YouTubeSourceCard';
+import { spotifyProvider } from './providers/spotify';
+import { ConnectedServices } from './components/ConnectedServices';
 
 type Playlist = {
   id: string;
@@ -39,7 +48,6 @@ type Playlist = {
   images?: { url: string }[];
   tracks?: { total: number };
 };
-type SearchResponse = { tracks?: { items: Track[] } };
 type SDKTrack = {
   id: string;
   name: string;
@@ -59,7 +67,7 @@ const emptyProgress = (): ProgressState => ({
 
 function TrackStamp({ track }: { track: Track | null }) {
   const heading = useRef<HTMLHeadingElement>(null);
-  const title = (track?.name || 'SOUND BECOMES SPACE').toUpperCase();
+  const title = (track?.title || 'SOUND BECOMES SPACE').toUpperCase();
   const titleLength = title.length;
   const fontSize = titleLength <= 8
     ? 'clamp(3.8rem, 8vw, 9.5rem)'
@@ -77,7 +85,7 @@ function TrackStamp({ track }: { track: Track | null }) {
         { yPercent: 0, opacity: 1, duration: 0.48, ease: 'power3.out' }
       );
     },
-    { dependencies: [track?.id] }
+    { dependencies: [track?.source, track?.id] }
   );
   return (
     <div className="stamp-mask">
@@ -95,13 +103,13 @@ function HeroArtwork({ track }: { track: Track | null }) {
     gsap.fromTo(frame.current, { opacity: 0.65, y: 12, scale: 0.985 }, {
       opacity: 1, y: 0, scale: 1, duration: 0.55, ease: 'power3.out', overwrite: true
     });
-  }, { dependencies: [track?.id] });
+  }, { dependencies: [track?.source, track?.id] });
 
   return (
     <div className="hero-artwork" ref={frame}>
       <div className="hero-art-mat">
-        {track?.album?.images?.[0]?.url ? (
-          <img src={track.album.images[0].url} alt={`${track.name || 'Album'} cover art`} />
+        {track?.artworkUrl ? (
+          <img src={track.artworkUrl} alt={`${track.title || 'Album'} cover art`} />
         ) : (
           <div className="art-placeholder"><AudioLines size={42} /></div>
         )}
@@ -113,7 +121,13 @@ function HeroArtwork({ track }: { track: Track | null }) {
 
 export default function App() {
   const { token, set, playlists: cachedPlaylists } = usePlayer();
+  const [source, setSource] = useState<SourceId>(() => {
+    try { return localStorage.getItem('auraplayer_source') === 'youtube' ? 'youtube' : 'spotify'; }
+    catch { return 'spotify'; }
+  });
+  const sourceRef = useRef<SourceId>(source);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [spotifyAccessLimited, setSpotifyAccessLimited] = useState(false);
   const [device, setDevice] = useState('');
   const [track, setTrack] = useState<Track | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -124,6 +138,19 @@ export default function App() {
   const currentTrackRef = useRef<Track | null>(null);
   const progressRef = useRef<ProgressState>(emptyProgress());
   const player = useRef<SpotifyPlayer | null>(null);
+  const deviceRef = useRef('');
+  const spotifySource = useRef<SpotifySource | null>(null);
+  if (!spotifySource.current) {
+    spotifySource.current = new SpotifySource(() => player.current, () => deviceRef.current, () => progressRef.current);
+  }
+  const [youtubeReady, setYoutubeReady] = useState(false);
+  const [youtubeError, setYoutubeError] = useState('');
+  const [youtubeQuota, setYoutubeQuota] = useState(getYouTubeQuota);
+  const youtubeSourceRef = useRef<YouTubeSource | null>(null);
+  if (!youtubeSourceRef.current) youtubeSourceRef.current = new YouTubeSource();
+  const youtubeSource = youtubeSourceRef.current;
+  const commandRef = useRef<(path: 'next' | 'previous') => Promise<void>>(async () => {});
+  const youtubeAutoplayFor = useRef('');
   const [volume, setVolume] = useState(68);
   const [shuffle, setShuffle] = useState(false);
   const [repeatMode, setRepeatMode] = useState<'off' | 'context' | 'track'>('off');
@@ -135,11 +162,14 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [servicesOpen, setServicesOpen] = useState(false);
   const [playlists, setPlaylists] = useState<Playlist[]>(cachedPlaylists || []);
-  const [queue, setQueue] = useState<QueuedTrack[]>([]);
+  const [queue, setQueue] = useState<QueueTrack[]>([]);
   const [autoplayEnabled, setAutoplayEnabled] = useState(autoplayEngine.isEnabled());
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Track[]>([]);
+  const [submittedQuery, setSubmittedQuery] = useState('');
+  const [youtubeSearchRequest, setYoutubeSearchRequest] = useState(0);
   const [genres, setGenres] = useState<string[]>([]);
   const [dominant, setDominant] = useState<{ trackId: string; colors: [string, string, string] } | null>(null);
   const [lyrics, setLyrics] = useState<LyricsRecord | null>(null);
@@ -190,11 +220,14 @@ export default function App() {
     });
   }, []);
 
+  sourceRef.current = source;
+  deviceRef.current = device;
   activeTrackId.current = track?.id || '';
 
   // Scene choice resolution with safe fallback
   const lyricsText = lyrics?.plainLyrics || lyrics?.syncedLyrics || '';
-  const albumColors = dominant && dominant.trackId === track?.id ? dominant.colors : undefined;
+  const trackColorKey = track ? `${track.source}:${track.id}` : '';
+  const albumColors = dominant && dominant.trackId === trackColorKey ? dominant.colors : undefined;
   const targetScene = useMemo(() => {
     try {
       return resolveScene(track, genres, albumColors, lyricsText);
@@ -229,7 +262,16 @@ export default function App() {
 
   const announce = useCallback(
     (error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Spotify could not complete that request.';
+      const statusCode = typeof error === 'object' && error !== null && 'statusCode' in error
+        ? Number((error as { statusCode?: unknown }).statusCode)
+        : undefined;
+      if (error instanceof SpotifyAccessLimitedError || statusCode === 403) {
+        setSpotifyAccessLimited(true);
+        setAuthError(null);
+        set({ error: error instanceof Error ? error.message : 'Spotify access is limited to allowlisted accounts.', loading: false });
+        return;
+      }
+      const message = error instanceof Error ? error.message : 'AuraPlayer could not complete that request.';
       set({ error: message, loading: false });
       setNotice(message);
       window.clearTimeout(noticeTimer.current);
@@ -247,15 +289,10 @@ export default function App() {
     }
     // Ensure all fields have safe defaults
     const safeTrack: Track = {
-      id: next.id || '',
-      name: next.name || 'Unknown Track',
-      uri: next.uri || '',
-      duration_ms: next.duration_ms || 0,
-      artists: Array.isArray(next.artists) ? next.artists : [],
-      album: {
-        name: next.album?.name || '',
-        images: Array.isArray(next.album?.images) ? next.album.images : []
-      }
+      id: next.id || '', source: next.source, title: next.title || 'Unknown Track',
+      artist: next.artist || 'Unknown Artist', album: next.album || '',
+      durationMs: next.durationMs || 0, artworkUrl: next.artworkUrl || '',
+      uri: next.uri || '', artistId: next.artistId, videoId: next.videoId
     };
     if (skipInFlight.current && safeTrack.id !== activeTrackId.current) {
       window.clearTimeout(skipReleaseTimer.current);
@@ -268,12 +305,63 @@ export default function App() {
     activeTrackId.current = safeTrack.id;
     currentTrackRef.current = safeTrack;
     setTrack(safeTrack);
-    if (safeTrack.uri) {
+    try { localStorage.setItem(`auraplayer_track_${safeTrack.source}`, JSON.stringify(safeTrack)); } catch { /* local storage may be disabled */ }
+    if (safeTrack.uri && safeTrack.source === 'spotify') {
       autoplayEngine.markTrackPlayed(safeTrack.uri);
     }
   }, []);
 
+  useEffect(() => {
+    const applySourceState = (id: SourceId) => (state: { playing: boolean; positionMs: number; durationMs: number; error?: string }) => {
+      if (sourceRef.current !== id) return;
+      progressRef.current = {
+        position: state.positionMs, duration: state.durationMs,
+        updatedAt: performance.now(), playing: state.playing
+      };
+      if (playingRef.current !== state.playing) {
+        playingRef.current = state.playing;
+        setPlaying(state.playing);
+      }
+      if (id === 'youtube') {
+        if (state.error) setYoutubeError(state.error);
+        else if (state.playing) setYoutubeError('');
+      }
+    };
+    const offSpotify = spotifySource.current?.onStateChange(applySourceState('spotify'));
+    const offYouTube = youtubeSource.onStateChange(applySourceState('youtube'));
+    youtubeSource.setCallbacks({
+      onReady: () => setYoutubeReady(true),
+      onEnded: () => { void commandRef.current('next'); },
+      onError: () => { void commandRef.current('next'); },
+      onNext: () => { void commandRef.current('next'); },
+      onPrevious: () => { void commandRef.current('previous'); }
+    });
+    return () => { offSpotify?.(); offYouTube(); };
+  }, [youtubeSource]);
+
+  useEffect(() => {
+    try {
+      const savedTrack = localStorage.getItem(`auraplayer_track_${source}`);
+      if (savedTrack) {
+        const parsed = JSON.parse(savedTrack) as Track;
+        if (parsed?.source === source && parsed.id) commitTrack(parsed);
+      }
+      const savedQueue = localStorage.getItem(`auraplayer_queue_${source}`);
+      if (savedQueue) {
+        const parsed = JSON.parse(savedQueue) as QueueTrack[];
+        if (Array.isArray(parsed)) setQueue(parsed.filter(item => item?.source === source));
+      }
+    } catch { /* ignore invalid saved player state */ }
+  // Restore the last selection once, before live SDK state replaces it.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try { localStorage.setItem(`auraplayer_queue_${source}`, JSON.stringify(queue)); } catch { /* storage may be disabled */ }
+  }, [queue, source]);
+
   const updatePlayback = (state: Playback | null) => {
+    if (sourceRef.current !== 'spotify') return;
     if (!state) return;
     if (state.item) {
       progressRef.current = {
@@ -282,10 +370,12 @@ export default function App() {
         updatedAt: performance.now(),
         playing: state.is_playing
       };
-      commitTrack(state.item);
+      commitTrack(fromSpotifyTrack(state.item));
     }
     playingRef.current = !!state.is_playing;
     setPlaying(!!state.is_playing);
+    playingRef.current = !!state.is_playing;
+    spotifySource.current?.emit({ playing: !!state.is_playing, positionMs: progressRef.current.position, durationMs: progressRef.current.duration });
     setShuffle(!!state.shuffle_state);
     setRepeatMode(state.repeat_state || 'off');
     if (state.device?.volume_percent != null) setVolume(state.device.volume_percent);
@@ -305,22 +395,19 @@ export default function App() {
   }, [announce, commitTrack]);
 
   const loadQueue = useCallback(async () => {
+    if (sourceRef.current !== 'spotify') return [] as SpotifyTrack[];
     try {
-      const data = await spotify<{ queue: Track[] }>('/me/player/queue');
+      const data = await spotify<{ queue: SpotifyTrack[] }>('/me/player/queue');
+      const spotifyQueue = data?.queue || [];
       const seen = new Set<string>();
-      const upNext: QueuedTrack[] = [];
-      for (const item of data?.queue || []) {
+      const upNext: QueueTrack[] = [];
+      for (const item of spotifyQueue) {
         if (!item) continue;
         const key = item.id || item.uri;
         if (!key || key === activeTrackId.current || seen.has(key)) continue;
         seen.add(key);
         upNext.push({
-          ...item,
-          artists: Array.isArray(item.artists) ? item.artists : [],
-          album: {
-            name: item.album?.name || '',
-            images: Array.isArray(item.album?.images) ? item.album.images : []
-          },
+          ...fromSpotifyTrack(item),
           isAutoplay: autoplayEngine.isAutoQueued(item.uri)
         });
       }
@@ -342,6 +429,7 @@ export default function App() {
           incoming.delete(key);
         }
         const addOnce = (item: Track) => {
+          if (item.source !== 'spotify') return;
           const key = item.id || item.uri;
           if (!key || known.has(key)) return;
           known.add(key);
@@ -351,15 +439,15 @@ export default function App() {
         upNext.forEach(addOnce);
         return stable;
       });
-      return upNext;
+      return spotifyQueue;
     } catch {
-      return [];
+      return [] as SpotifyTrack[];
     }
   }, []);
 
   const syncSdkState = useCallback(
     (state: any) => {
-      if (!state) return;
+      if (!state || sourceRef.current !== 'spotify') return;
       const item = state.track_window?.current_track as SDKTrack | undefined;
       const isPlaying = !state.paused;
       progressRef.current = {
@@ -372,29 +460,25 @@ export default function App() {
         playingRef.current = isPlaying;
         setPlaying(isPlaying);
       }
+      spotifySource.current?.emit({ playing: isPlaying, positionMs: progressRef.current.position, durationMs: progressRef.current.duration });
       if (item?.id && item.id !== activeTrackId.current) {
         commitTrack({
           id: item.id,
-          name: item.name || '',
+          source: 'spotify',
+          title: item.name || '',
+          artist: item.artists?.map(artist => artist.name).filter(Boolean).join(', ') || '',
+          album: item.album?.name || '',
+          durationMs: item.duration_ms || 0,
+          artworkUrl: item.album?.images?.[0]?.url || '',
           uri: item.uri || '',
-          duration_ms: item.duration_ms || 0,
-          artists: Array.isArray(item.artists)
-            ? item.artists.map(artist => ({
-                name: artist.name || '',
-                id: (artist.uri || '').split(':').pop() || ''
-              }))
-            : [],
-          album: {
-            name: item.album?.name || '',
-            images: Array.isArray(item.album?.images) ? item.album.images : []
-          }
+          artistId: (item.artists?.[0]?.uri || '').split(':').pop() || ''
         });
         void (async () => {
           const playback = await fetchInitialState();
           if (playback?.item?.id === item.id && playback.item.album?.images?.length) return;
           try {
-            const full = await spotify<Track>(`/tracks/${item.id}`);
-            if (full) commitTrack(full);
+            const full = await spotify<SpotifyTrack>(`/tracks/${item.id}`);
+            if (full) commitTrack(fromSpotifyTrack(full));
           } catch {}
         })();
       }
@@ -410,6 +494,10 @@ export default function App() {
         const callbackResult = await handleCallback();
         if (!mounted) return;
         if (!callbackResult.success && callbackResult.error) {
+          if (callbackResult.statusCode === 403) {
+            setSpotifyAccessLimited(true);
+            return;
+          }
           setAuthError(callbackResult.error);
           announce(callbackResult.error);
           return;
@@ -431,7 +519,8 @@ export default function App() {
             set({ playlists: cleanPlaylists });
           }
         } catch (playlistErr) {
-          console.warn('Could not load playlists (non-fatal):', playlistErr);
+          if (playlistErr instanceof SpotifyAccessLimitedError) announce(playlistErr);
+          else console.warn('Could not load playlists (non-fatal):', playlistErr);
         }
       } catch (error) {
         if (!mounted) return;
@@ -447,7 +536,7 @@ export default function App() {
 
   // Safe genres lookup
   useEffect(() => {
-    const artistId = track?.artists?.[0]?.id;
+    const artistId = track?.source === 'spotify' ? track.artistId : undefined;
     if (!artistId) {
       setGenres([]);
       return;
@@ -462,15 +551,15 @@ export default function App() {
     return () => {
       stale = true;
     };
-  }, [track?.id, track?.artists?.[0]?.id]);
+  }, [track?.id, track?.source, track?.artistId]);
 
   // Safe dominant color sampling
   useEffect(() => {
     setDominant(null);
-    const url = track?.album?.images?.[0]?.url;
+    const url = track?.artworkUrl;
     if (!url) return;
     let stale = false;
-    void extractAlbumColors(track?.id || url, url).then(colors => {
+    void extractAlbumColors(`${track?.source || 'spotify'}:${track?.id || url}`, url).then(colors => {
       if (!stale && colors.length) setDominant({
         trackId: track?.id || url,
         colors: [colors[0] || '', colors[1] || '', colors[2] || '']
@@ -479,30 +568,46 @@ export default function App() {
     return () => {
       stale = true;
     };
-  }, [track?.id, track?.album?.images?.[0]?.url]);
+  }, [track?.id, track?.source, track?.artworkUrl]);
 
   // LRCLib Lyrics Fetching
   useEffect(() => {
     setLyrics(null);
-    if (!track?.name) return;
+    if (!track?.title) return;
     const controller = new AbortController();
     void fetchLyrics(track, controller.signal).then(result => {
       if (!controller.signal.aborted) setLyrics(result);
     }).catch(() => {});
     return () => controller.abort();
-  }, [track?.id]);
+  }, [track?.id, track?.source]);
 
   // Autoplay Trigger on Track Change
   useEffect(() => {
-    if (!track?.id || !device) return;
+    if (!track?.id || !device || source !== 'spotify') return;
     void (async () => {
       const currentQ = await loadQueue();
-      const added = await autoplayEngine.ensureAutoplay(track, device, currentQ);
+      const added = await autoplayEngine.ensureAutoplay(toSpotifyTrack(track), device, currentQ);
       if (added.length > 0) {
         await loadQueue();
       }
     })();
-  }, [track?.id, device, loadQueue]);
+  }, [track?.id, device, loadQueue, source]);
+
+  useEffect(() => {
+    if (source !== 'youtube' || !track || track.source !== 'youtube' || !autoplayEnabled) return;
+    const currentIndex = queue.findIndex(item => item.source === 'youtube' && item.id === track.id);
+    const remaining = currentIndex < 0 ? queue.length : queue.length - currentIndex - 1;
+    if (remaining >= 5 || youtubeAutoplayFor.current === track.id) return;
+    youtubeAutoplayFor.current = track.id;
+    void fillYouTubeQueue(track).then(suggestions => {
+      if (sourceRef.current !== 'youtube' || currentTrackRef.current?.id !== track.id) return;
+      setQueue(previous => {
+        const seen = new Set(previous.filter(item => item.source === 'youtube').map(item => item.id));
+        const additions = suggestions.filter(item => !seen.has(item.id)).map(item => ({ ...item, isAutoplay: true }));
+        return [...previous, ...additions];
+      });
+    });
+  }, [track?.id, source, autoplayEnabled, queue.length]);
 
   // Spotify Web Playback SDK setup
   useEffect(() => {
@@ -537,13 +642,15 @@ export default function App() {
         if (!alive) return;
         setDevice(device_id);
         try {
-          await spotify('/me/player', {
-            method: 'PUT',
-            body: JSON.stringify({ device_ids: [device_id] })
-          });
-          await instance?.activateElement().catch(() => {});
-          await fetchInitialState();
-          await loadQueue();
+          if (sourceRef.current === 'spotify') {
+            await spotify('/me/player', {
+              method: 'PUT',
+              body: JSON.stringify({ device_ids: [device_id] })
+            });
+            await instance?.activateElement().catch(() => {});
+            await fetchInitialState();
+            await loadQueue();
+          }
         } catch (error) {
           announce(error);
         }
@@ -593,29 +700,44 @@ export default function App() {
   // Search query debounce
   useEffect(() => {
     let timeout: number | undefined;
-    if (query.trim().length < 2) {
+    const term = source === 'youtube' ? submittedQuery.trim() : query.trim();
+    if (term.length < 2) {
       setResults([]);
       return;
     }
     timeout = window.setTimeout(async () => {
       try {
-        const data = await spotify<SearchResponse>(
-          `/search?type=track&limit=8&q=${encodeURIComponent(query.trim())}`
-        );
-        const items = data?.tracks?.items || [];
+        const items = source === 'youtube'
+          ? await searchYouTube(term)
+          : await spotifyProvider.searchTracks?.(term) || [];
         setResults(items.filter(Boolean));
+        if (source === 'youtube') {
+          setYoutubeError('');
+          setYoutubeQuota(getYouTubeQuota());
+        }
       } catch (error) {
-        announce(error);
+        if (source === 'youtube') {
+          const message = error instanceof Error ? error.message : 'YouTube search failed.';
+          setYoutubeError(message);
+          setNotice(message);
+          setYoutubeQuota(getYouTubeQuota());
+        } else announce(error);
       }
-    }, 240);
+    }, source === 'youtube' ? 0 : 240);
     return () => window.clearTimeout(timeout);
-  }, [query, announce]);
+  }, [query, submittedQuery, source, youtubeSearchRequest, announce]);
 
   const toggle = async () => {
     try {
-      if (!player.current) throw new Error('Connect Spotify to start the player.');
-      await player.current.activateElement();
-      await player.current.togglePlay();
+      if (sourceRef.current === 'youtube') {
+        if (!track || track.source !== 'youtube') throw new Error('Search YouTube and select a video first.');
+        if (playingRef.current) await youtubeSource.pause();
+        else await youtubeSource.resume();
+        return;
+      }
+      if (!token) throw new Error('Connect Spotify to start the player.');
+      if (playingRef.current) await spotifySource.current?.pause();
+      else await spotifySource.current?.resume();
     } catch (error) {
       announce(error);
     }
@@ -631,13 +753,23 @@ export default function App() {
       }, 1500);
     }
     try {
-      if (player.current) {
-        if (path === 'next') await player.current.nextTrack();
-        else await player.current.previousTrack();
+      if (sourceRef.current === 'youtube') {
+        const index = queue.findIndex(item => item.source === 'youtube' && item.id === currentTrackRef.current?.id);
+        const target = queue[index + (path === 'next' ? 1 : -1)];
+        if (path === 'previous' && (index <= 0 || !target)) {
+          await youtubeSource.seek(0);
+          return;
+        }
+        if (!target || target.source !== 'youtube') throw new Error('No more videos in this queue. Search for more music or enable RELATED PICKS.');
+        await youtubeSource.play(target);
+        commitTrack(target);
+        progressRef.current = { position: 0, duration: target.durationMs, updatedAt: performance.now(), playing: true };
+        playingRef.current = true;
+        setPlaying(true);
         return;
       }
       if (!device) throw new Error('Start AuraPlayer to make it an active Spotify device.');
-      await spotify(`/me/player/${path}?device_id=${device}`, { method: 'POST' });
+      await spotifySource.current?.[path]();
     } catch (error) {
       if (path === 'next') {
         skipInFlight.current = false;
@@ -653,7 +785,8 @@ export default function App() {
     const position = Math.max(0, Math.min(duration, fraction * duration));
     progressRef.current = { ...p, position, updatedAt: performance.now() };
     try {
-      await player.current?.seek(position);
+      if (sourceRef.current === 'youtube') await youtubeSource.seek(position);
+      else await spotifySource.current?.seek(position);
     } catch (error) {
       announce(error);
     }
@@ -662,8 +795,8 @@ export default function App() {
   const setVolumeValue = async (value: number) => {
     setVolume(value);
     try {
-      if (player.current) await player.current.setVolume(value / 100);
-      else await spotify(`/me/player/volume?volume_percent=${value}`, { method: 'PUT' });
+      if (sourceRef.current === 'youtube') await youtubeSource.setVolume(value / 100);
+      else await spotifySource.current?.setVolume(value / 100);
     } catch (error) {
       announce(error);
     }
@@ -671,17 +804,29 @@ export default function App() {
 
   const playTrack = async (selected: Track) => {
     try {
-      if (!device) throw new Error('Connect AuraPlayer first, then select a track.');
+      if (selected.source === 'youtube') {
+        await youtubeSource.play(selected);
+        commitTrack(selected);
+        progressRef.current = { position: 0, duration: selected.durationMs, updatedAt: performance.now(), playing: true };
+        playingRef.current = true;
+        setPlaying(true);
+        setQueue(previous => {
+          const remaining = [...results, ...previous].filter(item => item.source === 'youtube' && item.id !== selected.id);
+          const unique = new Map(remaining.map(item => [item.id, item]));
+          return [{ ...selected, isAutoplay: false }, ...unique.values()];
+        });
+        setSearchOpen(false);
+        setPlaylistOpen(false);
+        return;
+      }
+      if (!device) throw new Error('Connect AuraPlayer first, then select a Spotify track.');
       autoplayEngine.setContextPlay(false);
       await player.current?.activateElement();
-      await spotify(`/me/player/play?device_id=${device}`, {
-        method: 'PUT',
-        body: JSON.stringify({ uris: [selected.uri] })
-      });
+      await spotifyProvider.play?.(selected, device);
       commitTrack(selected);
       progressRef.current = {
         position: 0,
-        duration: selected.duration_ms || 0,
+        duration: selected.durationMs || 0,
         updatedAt: performance.now(),
         playing: true
       };
@@ -711,10 +856,14 @@ export default function App() {
   };
 
   const shuffleToggle = async () => {
+    if (sourceRef.current !== 'spotify') {
+      setNotice('Shuffle is not available for YouTube embedded videos.');
+      return;
+    }
     const next = !shuffle;
     setShuffle(next);
     try {
-      await spotify(`/me/player/shuffle?state=${next}`, { method: 'PUT' });
+      await spotifyProvider.setShuffle?.(next, device || undefined);
       setQueue([]);
       await loadQueue();
     } catch (error) {
@@ -723,9 +872,13 @@ export default function App() {
   };
 
   const repeatToggle = async () => {
+    if (sourceRef.current !== 'spotify') {
+      setNotice('Repeat is not available for YouTube embedded videos.');
+      return;
+    }
     const next = repeatMode === 'off' ? 'context' : repeatMode === 'context' ? 'track' : 'off';
     try {
-      await spotify(`/me/player/repeat?state=${next}`, { method: 'PUT' });
+      await spotifyProvider.setRepeat?.(next, device || undefined);
       setRepeatMode(next);
     } catch (error) {
       announce(error);
@@ -749,7 +902,7 @@ export default function App() {
     const next = !autoplayEngine.isEnabled();
     autoplayEngine.setEnabled(next);
     setAutoplayEnabled(next);
-    setNotice(`Spotify Autoplay ${next ? 'ENABLED' : 'PAUSED'}.`);
+    setNotice(`${sourceRef.current === 'spotify' ? 'Spotify' : 'YouTube'} RELATED PICKS ${next ? 'ENABLED' : 'PAUSED'}.`);
   };
 
   const clearQueue = () => {
@@ -760,7 +913,7 @@ export default function App() {
 
   const connect = async () => {
     try {
-      await login();
+      await spotifyProvider.connect();
     } catch (error) {
       announce(error);
     }
@@ -778,12 +931,53 @@ export default function App() {
   };
 
   const openPlaylists = async () => {
+    if (sourceRef.current !== 'spotify') {
+      setNotice('Playlists are not available for YouTube’s public video source.');
+      return;
+    }
     setExpanded(false);
     setSearchOpen(false);
     try {
-      const data = await spotify<{ items: Playlist[] }>('/me/playlists?limit=30');
-      setPlaylists((data?.items || []).filter(Boolean));
+      const items = await spotifyProvider.getPlaylists?.() as Playlist[] | undefined;
+      setPlaylists((items || []).filter(Boolean));
       setPlaylistOpen(true);
+    } catch (error) {
+      announce(error);
+    }
+  };
+
+  const switchSource = async (next: SourceId) => {
+    if (next === sourceRef.current) return;
+    const previous = sourceRef.current;
+    try {
+      if (previous === 'spotify' && (token || player.current)) await spotifySource.current?.pause();
+      if (previous === 'youtube' && youtubeReady) await youtubeSource.pause();
+    } catch { /* source switch should still complete if the provider is already unavailable */ }
+    sourceRef.current = next;
+    playingRef.current = false;
+    setPlaying(false);
+    progressRef.current = emptyProgress();
+    setSource(next);
+    setQuery('');
+    setSubmittedQuery('');
+    setResults([]);
+    setPlaylistOpen(false);
+    setYoutubeError('');
+    try {
+      localStorage.setItem('auraplayer_source', next);
+      const savedQueue = JSON.parse(localStorage.getItem(`auraplayer_queue_${next}`) || '[]') as QueueTrack[];
+      setQueue(Array.isArray(savedQueue) ? savedQueue.filter(item => item?.source === next) : []);
+      const savedTrack = JSON.parse(localStorage.getItem(`auraplayer_track_${next}`) || 'null') as Track | null;
+      commitTrack(savedTrack?.source === next ? savedTrack : null);
+      if (next === 'youtube' && savedTrack?.source === 'youtube') {
+        progressRef.current = { position: 0, duration: savedTrack.durationMs, updatedAt: performance.now(), playing: false };
+        void youtubeSource.cue(savedTrack).catch(announce);
+      }
+      if (next === 'spotify' && token && device) {
+        await spotify('/me/player', { method: 'PUT', body: JSON.stringify({ device_ids: [device], play: false }) });
+        await fetchInitialState();
+        await loadQueue();
+      }
     } catch (error) {
       announce(error);
     }
@@ -835,7 +1029,7 @@ export default function App() {
             <button
               className="error-reset-btn"
               onClick={() => {
-                logout();
+                spotifyProvider.disconnect();
                 setAuthError(null);
                 set({ token: null });
                 void connect();
@@ -850,6 +1044,32 @@ export default function App() {
             </button>
           </div>
         </div>
+      </main>
+    );
+  }
+
+  if (spotifyAccessLimited) {
+    return (
+      <main className="app-shell error-boundary-screen" role="alert">
+        <section className="error-boundary-card spotify-access-card">
+          <div className="error-card-badge"><AlertTriangle size={16} /><span>HTTP 403 / DEVELOPER MODE</span></div>
+          <h1 className="error-card-title">SPOTIFY ACCESS LIMITED</h1>
+          <p className="error-card-lead">this app is in Spotify's developer mode and only allowlisted accounts can log in. Use YouTube mode instead, or ask the owner to add your Spotify email.</p>
+          <div className="error-actions-row">
+            <button className="error-reload-btn" onClick={() => {
+              setSpotifyAccessLimited(false);
+              setAuthError(null);
+              void switchSource('youtube');
+            }}>SWITCH TO YOUTUBE</button>
+            <button className="error-reset-btn" onClick={() => {
+              spotifyProvider.disconnect();
+              setSpotifyAccessLimited(false);
+              setAuthError(null);
+              set({ token: null });
+              void connect();
+            }}>TRY AGAIN</button>
+          </div>
+        </section>
       </main>
     );
   }
@@ -885,11 +1105,18 @@ export default function App() {
         </a>
         <span className="mast-sticker">SCENE ENGINE / LIVE</span>
         <div className="mast-actions">
-          <button className="quick-library-btn" onClick={openSearch} aria-label="Search Spotify" title="Search tracks">
+          <div className="source-switcher" role="tablist" aria-label="Music source">
+            <button role="tab" aria-selected={source === 'spotify'} className={source === 'spotify' ? 'is-active' : ''} onClick={() => void switchSource('spotify')}>SPOTIFY</button>
+            <button role="tab" aria-selected={source === 'youtube'} className={source === 'youtube' ? 'is-active' : ''} onClick={() => void switchSource('youtube')}>YOUTUBE</button>
+          </div>
+          <button className="quick-library-btn" onClick={openSearch} aria-label={`Search ${source === 'youtube' ? 'YouTube' : 'Spotify'}`} title={`Search ${source === 'youtube' ? 'YouTube videos' : 'Spotify tracks'}`}>
             <Search size={14} /><span>SEARCH</span>
           </button>
-          <button className="quick-library-btn" onClick={() => void openPlaylists()} aria-label="Open your playlists" title="Your playlists">
-            <ListMusic size={14} /><span>PLAYLISTS</span>
+          <button className="quick-library-btn" onClick={() => void openPlaylists()} disabled={source === 'youtube'} aria-label="Open Spotify playlists" title={source === 'youtube' ? 'Playlists are only available from Spotify' : 'Your Spotify playlists'}>
+            <LibraryBig size={14} /><span>PLAYLISTS</span>
+          </button>
+          <button className="quick-library-btn services-trigger" onClick={() => setServicesOpen(true)} aria-label="Connected music services" title="Connected music services">
+            <Music2 size={14} /><span>SERVICES</span>
           </button>
           {!isInstalled && (
             <button className="install-app-btn" onClick={() => void installApp()} aria-label="Install AuraPlayer app">
@@ -904,14 +1131,14 @@ export default function App() {
             <ListMusic size={14} /> PLAY ORDER ({queue.length})
           </button>
           <span className="device-state">
-            <i className={device ? 'online' : ''} />
-            {device ? 'PLAYER READY' : 'SPOTIFY OFFLINE'}
+            <i className={(source === 'spotify' ? device : youtubeReady) ? 'online' : ''} />
+            {source === 'spotify' ? (device ? 'SPOTIFY READY' : 'SPOTIFY OFFLINE') : (youtubeReady ? 'YOUTUBE READY' : 'YOUTUBE LOADING')}
           </span>
-          {token ? (
+          {source === 'spotify' && token ? (
             <button
               className="sign-button"
               onClick={() => {
-                logout();
+                spotifyProvider.disconnect();
                 player.current?.disconnect();
                 set({ token: null });
                 setDevice('');
@@ -919,11 +1146,11 @@ export default function App() {
             >
               <LogOut size={15} /> DISCONNECT
             </button>
-          ) : (
+          ) : source === 'spotify' ? (
             <button className="sign-button" onClick={connect}>
               <span className="spotify-glyph">●</span> CONNECT SPOTIFY <ArrowUpRight size={15} />
             </button>
-          )}
+          ) : <span className="source-no-login">YOUTUBE · NO LOGIN</span>}
         </div>
       </header>
 
@@ -942,16 +1169,17 @@ export default function App() {
             <HeroArtwork track={track} />
             <div className="hero-facts">
               <span>ATMOSPHERE</span><strong>{visibleScene.label.toUpperCase()}</strong>
-              <span>ALBUM</span><strong>{track?.album?.name || 'AURA ARCHIVE'}</strong>
-              <span>RUNTIME</span><strong>{track?.duration_ms ? fmt(track.duration_ms) : '0:00'}</strong>
+              <span>ALBUM</span><strong>{track?.album || 'AURA ARCHIVE'}</strong>
+              <span>RUNTIME</span><strong>{track?.durationMs ? fmt(track.durationMs) : '0:00'}</strong>
             </div>
           </div>
+          <YouTubeSourceCard source={youtubeSource} error={youtubeError} />
           <div className="hero-copy-column">
             <TrackStamp track={track} />
             <div className="hero-song-meta">
-              <span>NOW PLAYING / {track?.artists?.length ? track.artists.length.toString().padStart(2, '0') : '00'}</span>
-              <p>{track?.artists?.map(artist => artist.name).filter(Boolean).join(' / ') || 'CONNECT SPOTIFY TO BEGIN'}</p>
-              <small>{track?.album?.name || 'YOUR NEXT FAVORITE TRACK'}</small>
+              <span>SOURCE / {source.toUpperCase()}</span>
+              <p>{track?.artist || (source === 'spotify' ? 'CONNECT SPOTIFY TO BEGIN' : 'SEARCH YOUTUBE TO BEGIN')}</p>
+              <small>{track?.album || 'YOUR NEXT FAVORITE TRACK'}</small>
             </div>
             <HeroLyrics
               trackId={track?.id}
@@ -990,6 +1218,7 @@ export default function App() {
       {/* Circular Wheel Player */}
       <WheelPlayer
         track={track}
+        source={source}
         scene={visibleScene}
         playing={playing}
         progressRef={progressRef}
@@ -1014,11 +1243,27 @@ export default function App() {
         onExpand={() => setExpanded(true)}
         onClose={() => setExpanded(false)}
       />
+      <ConnectedServices
+        open={servicesOpen}
+        spotifyConnected={Boolean(token)}
+        youtubeConfigured={Boolean(import.meta.env.VITE_YOUTUBE_API_KEY)}
+        onClose={() => setServicesOpen(false)}
+        onSpotifyConnect={() => { setServicesOpen(false); void connect(); }}
+        onSpotifyDisconnect={() => {
+          spotifyProvider.disconnect();
+          player.current?.disconnect();
+          set({ token: null });
+          setDevice('');
+          setServicesOpen(false);
+        }}
+      />
       <ContrastDebugOverlay />
 
       {/* Dedicated UP NEXT Queue Dock */}
       <UpNextQueue
         open={queueOpen}
+        source={source}
+        autoplayAvailable={source === 'spotify' || Boolean(import.meta.env.VITE_LASTFM_API_KEY)}
         onClose={() => setQueueOpen(false)}
         queue={queue}
         currentTrackId={track?.id}
@@ -1028,7 +1273,7 @@ export default function App() {
         onPlayTrack={item => void playTrack(item)}
       />
 
-      {!token && (
+      {source === 'spotify' && !token && (
         <div className="connect-note">
           <span>FIRST, THE GOOD STUFF.</span>
           <button onClick={connect}>
@@ -1037,7 +1282,7 @@ export default function App() {
         </div>
       )}
 
-      {token && device && !playing && !startDismissed && (
+      {source === 'spotify' && token && device && !playing && !startDismissed && (
         <div className="start-overlay-backdrop" role="dialog" aria-modal="true" aria-label="Start Spotify playback">
           <button className="start-overlay" onClick={() => {
             setStartDismissed(true);
@@ -1074,16 +1319,28 @@ export default function App() {
         </header>
 
         {searchOpen ? (
-          <label className="search-box">
-            <Search size={18} />
+          <form className="search-box" onSubmit={event => {
+            event.preventDefault();
+            if (source === 'youtube') {
+              setSubmittedQuery(query.trim());
+              setYoutubeSearchRequest(value => value + 1);
+            }
+          }}>
+            <Search size={18} aria-hidden="true" />
             <input
               autoFocus
-              placeholder="Search track, artist, album"
+              placeholder={source === 'youtube' ? 'Search YouTube videos' : 'Search track, artist, album'}
               value={query}
               onChange={event => setQuery(event.target.value)}
             />
-          </label>
+            <button type="submit" aria-label={`Search ${source}`}>SEARCH</button>
+          </form>
         ) : null}
+        {searchOpen && source === 'youtube' && (
+          <span className={`youtube-quota-sticker ${youtubeQuota.low ? 'is-low' : ''}`}>
+            {youtubeQuota.low ? 'QUOTA LOW · ' : 'YOUTUBE SEARCHES · '}{youtubeQuota.searches}/{youtubeQuota.limit} TODAY
+          </span>
+        )}
 
         <div className="library-list">
           {searchOpen
@@ -1093,21 +1350,16 @@ export default function App() {
                   key={item?.id || Math.random()}
                   onClick={() => item && void playTrack(item)}
                 >
-                  {item?.album?.images?.[0]?.url ? (
-                    <img src={item.album.images[0].url} alt="" />
+                  {item?.artworkUrl ? (
+                    <img src={item.artworkUrl} alt="" />
                   ) : (
                     <span className="library-art">
                       <Headphones />
                     </span>
                   )}
                   <span>
-                    <strong>{item?.name || 'Unknown Track'}</strong>
-                    <small>
-                      {Array.isArray(item?.artists)
-                        ? item.artists.map(a => a?.name || '').join(', ')
-                        : ''}{' '}
-                      / {item?.album?.name || ''}
-                    </small>
+                    <strong>{item?.title || 'Unknown Track'}</strong>
+                    <small>{item?.artist || 'Unknown Artist'} / {item?.album || ''} · {item?.source.toUpperCase()}</small>
                   </span>
                   <b>PLAY ↗</b>
                 </button>
@@ -1133,7 +1385,7 @@ export default function App() {
                 </button>
               ))}
           {searchOpen && !results.length ? (
-            <p className="empty-library">TYPE TWO LETTERS TO SEARCH SPOTIFY.</p>
+            <p className="empty-library">{source === 'youtube' ? 'TYPE A SEARCH AND PRESS ENTER. RESULTS ARE CACHED TO PROTECT API QUOTA.' : 'TYPE TWO LETTERS TO SEARCH SPOTIFY.'}</p>
           ) : null}
           {playlistOpen && !playlists.length ? (
             <p className="empty-library">NO PLAYLISTS FOUND.</p>
@@ -1150,10 +1402,11 @@ export default function App() {
             <Search size={15} /> SEARCH
           </button>
           <button
+            disabled={source !== 'spotify'}
             onClick={async () => {
               try {
-                const data = await spotify<{ items: Playlist[] }>('/me/playlists?limit=30');
-                setPlaylists((data?.items || []).filter(Boolean));
+                const items = await spotifyProvider.getPlaylists?.() as Playlist[] | undefined;
+                setPlaylists((items || []).filter(Boolean));
                 closeLibrary();
                 setPlaylistOpen(true);
               } catch (error) {

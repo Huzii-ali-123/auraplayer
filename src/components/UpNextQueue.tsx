@@ -1,12 +1,14 @@
 import { memo } from 'react';
 import { ListMusic, Trash2, X } from 'lucide-react';
-import type { Track } from '../spotify/api';
-import type { QueuedTrack } from '../autoplay/autoplay';
+import type { Track, QueueTrack } from '../player/types';
+import type { SourceId } from '../player/types';
 
 type Props = {
   open: boolean;
+  source: SourceId;
+  autoplayAvailable: boolean;
   onClose: () => void;
-  queue: QueuedTrack[];
+  queue: QueueTrack[];
   currentTrackId?: string;
   autoplayEnabled: boolean;
   onToggleAutoplay: () => void;
@@ -19,6 +21,8 @@ const fmt = (ms: number) =>
 
 function UpNextQueueView({
   open,
+  source,
+  autoplayAvailable,
   onClose,
   queue,
   currentTrackId,
@@ -44,7 +48,8 @@ function UpNextQueueView({
           <button
             className={`upnext-pill-btn ${autoplayEnabled ? 'is-active' : ''}`}
             onClick={onToggleAutoplay}
-            title="Toggle AuraPlayer's similar-track queue filling"
+            disabled={!autoplayAvailable}
+            title={source === 'youtube' ? 'YouTube related picks require a Last.fm API key.' : "Toggle AuraPlayer's similar-track queue filling"}
             aria-pressed={autoplayEnabled}
           >
             RELATED PICKS: {autoplayEnabled ? 'ON' : 'OFF'}
@@ -63,13 +68,13 @@ function UpNextQueueView({
       <div className="upnext-content">
         {queue.length ? (
           <div className="upnext-scroll-list">
-            <span className="upnext-section-label">PLAY ORDER · RELATED PICKS ARE ADDED AUTOMATICALLY</span>
+            <span className="upnext-section-label">PLAY ORDER · {source === 'youtube' ? 'LOCAL VIDEO QUEUE' : 'SPOTIFY QUEUE'}</span>
             {queue.map((item, index) => {
               const isCurrent = item.id === currentTrackId;
                 const hasPlayed = currentIndex >= 0 && index < currentIndex;
               return (
                 <button
-                  key={item.id || item.uri}
+                  key={`${item.source}:${item.id || item.uri}`}
                   className={`upnext-row ${isCurrent ? 'is-current' : ''}`}
                   aria-current={isCurrent ? 'true' : undefined}
                   disabled={isCurrent}
@@ -77,15 +82,15 @@ function UpNextQueueView({
                 >
                   <span className="upnext-pos">{String(index + 1).padStart(2, '0')}</span>
                   <div className="upnext-art">
-                    {item.album?.images?.[0]?.url ? (
-                      <img src={item.album.images[0].url} alt="" />
+                    {item.artworkUrl ? (
+                      <img src={item.artworkUrl} alt="" />
                     ) : (
                       <div className="upnext-art-placeholder">{index + 1}</div>
                     )}
                   </div>
                   <div className="upnext-meta">
-                    <strong>{item.name || 'Unknown Track'}</strong>
-                    <small>{item.artists?.map(artist => artist?.name || '').filter(Boolean).join(', ') || 'Unknown Artist'}</small>
+                    <strong>{item.title || 'Unknown Track'}</strong>
+                    <small>{item.artist || 'Unknown Artist'} · {item.source.toUpperCase()}</small>
                   </div>
                   <div className="upnext-right">
                     {isCurrent ? (
@@ -97,7 +102,7 @@ function UpNextQueueView({
                     ) : (
                       <span className="queue-pill">QUEUED</span>
                     )}
-                    <span className="upnext-duration">{fmt(item.duration_ms || 0)}</span>
+                    <span className="upnext-duration">{fmt(item.durationMs || 0)}</span>
                   </div>
                 </button>
               );
@@ -107,7 +112,9 @@ function UpNextQueueView({
           <div className="upnext-empty-state">
             <span className="empty-sticker">QUEUE EMPTY</span>
             <p>
-              {autoplayEnabled
+              {source === 'youtube'
+                ? 'YouTube videos are queued locally. Search and choose videos; related picks need a Last.fm API key.'
+                : autoplayEnabled
                 ? 'AuraPlayer will find related tracks and add them to your Spotify queue as playback continues.'
                 : 'No queue entries yet. Search for a track or turn on related picks.'}
             </p>

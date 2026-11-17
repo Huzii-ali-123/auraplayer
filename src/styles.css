@@ -21,6 +21,13 @@
   --line: 3px solid #111;
   --shadow: 6px 6px 0 #111;
   --mono: 'Space Mono', monospace;
+  --layer-content: 2;
+  --layer-transition: 8;
+  --layer-queue: 30;
+  --layer-library: 35;
+  --layer-player: 60;
+  --layer-notice: 80;
+  --layer-modal: 120;
 }
 
 * {
@@ -99,7 +106,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 .scene-zipper {
   position: fixed;
-  z-index: 30;
+  z-index: var(--layer-transition);
   top: 0;
   bottom: 0;
   left: 0;
@@ -831,7 +838,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 /* Wheel Dock & Visualizer */
 .wheel-dock {
   position: fixed;
-  z-index: 8;
+  z-index: var(--layer-player);
   left: 36px;
   bottom: 30px;
   width: 220px;
@@ -1200,7 +1207,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
   top: 76px;
   bottom: 0;
   width: min(450px, calc(100vw - 28px));
-  z-index: 18;
+  z-index: var(--layer-queue);
   background: var(--surface);
   color: var(--on-surface);
   border-left: 4px solid #111;
@@ -1738,7 +1745,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 .notice {
   position: fixed;
-  z-index: 25;
+  z-index: var(--layer-notice);
   top: 93px;
   right: 4vw;
   max-width: min(410px, 90vw);
@@ -1763,7 +1770,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 
 .library {
   position: fixed;
-  z-index: 15;
+  z-index: var(--layer-library);
   top: 88px;
   right: 28px;
   bottom: 28px;
@@ -2340,7 +2347,7 @@ button:focus-visible, a:focus-visible, input:focus-visible {
 .start-overlay-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 90;
   display: grid;
   place-items: center;
   padding: 20px;
@@ -2712,4 +2719,107 @@ button:focus-visible, a:focus-visible, input:focus-visible {
     font-size: 0;
     gap: 0;
   }
+}
+
+/* Connected provider hub uses one deliberate top-level modal layer. */
+.services-backdrop {
+  position: fixed; inset: 0; z-index: var(--layer-modal); display: grid; place-items: center;
+  padding: 18px; background: rgba(15, 15, 15, 0.68);
+}
+.services-dialog {
+  width: min(1020px, 100%); max-height: min(90svh, 820px); overflow: auto;
+  padding: clamp(16px, 3vw, 30px); background: var(--surface); color: var(--on-surface);
+  border: 4px solid var(--ink); box-shadow: 10px 10px 0 var(--ink); outline: none;
+}
+.services-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 4px solid var(--ink); padding-bottom: 14px; }
+.services-heading small { font: 10px var(--mono); font-weight: 800; letter-spacing: .08em; }
+.services-heading h2 { margin: 7px 0 0; font-size: clamp(25px, 4vw, 42px); line-height: 1; overflow-wrap: anywhere; }
+.services-close { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); }
+.services-intro { max-width: 70ch; line-height: 1.45; }
+.services-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.service-card { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 16px; background: var(--paper); color: var(--ink); border: 3px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); }
+.service-card.is-connected { outline: 4px solid var(--accent); outline-offset: -8px; }
+.service-card-top { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.service-mark { width: 38px; height: 38px; display: grid; place-items: center; background: var(--accent); border: 2px solid var(--ink); }
+.service-status { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; background: var(--surface); border: 2px solid var(--ink); font: 9px var(--mono); font-weight: 800; }
+.service-status.status-connected { background: #c5ee98; }
+.service-card h3 { margin: 0; font-size: 23px; }
+.service-card p { margin: 0; line-height: 1.4; }
+.service-card ul { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
+.service-card li { padding: 5px 7px; background: var(--surface); border: 1px solid var(--ink); font: 9px var(--mono); font-weight: 700; }
+.service-requirement { display: block; margin-top: auto; line-height: 1.45; }
+.service-action { min-height: 42px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--accent); color: var(--on-accent); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); font: 10px var(--mono); font-weight: 800; }
+.service-unavailable-note { padding-top: 8px; font: 9px var(--mono); font-weight: 800; }
+.services-footer { margin-top: 18px; padding-top: 12px; border-top: 2px solid var(--ink); font: 9px var(--mono); font-weight: 800; line-height: 1.5; }
+
+/* Mobile text containment: keep the display type, constrain the layout boxes. */
+@media (max-width: 760px) {
+  .hero-editorial-grid, .hero-copy-column, .hero-art-column, .stamp-mask,
+  .hero-song-meta, .hero-lyrics-wrapper { min-width: 0; width: 100%; max-width: 100%; }
+  .hero-editorial-grid { gap: clamp(18px, 5vw, 30px); }
+  .hero-copy-column { gap: 12px; }
+  .stamp-mask { padding: clamp(10px, 3vw, 16px); }
+  .hero-copy-column .track-stamp {
+    width: 100%; max-width: 100%; margin: 0; line-height: 1.02; letter-spacing: -0.035em;
+    overflow-wrap: anywhere; word-break: normal; text-shadow: none;
+  }
+  .hero-song-meta { overflow-wrap: anywhere; }
+  .hero-song-meta p { font-size: clamp(17px, 5vw, 24px); line-height: 1.2; overflow-wrap: anywhere; word-break: normal; }
+  .hero-song-meta small { line-height: 1.35; overflow-wrap: anywhere; }
+  .hero-copy-column .hero-lyrics-viewport.is-synced { height: clamp(150px, 22svh, 220px); min-height: 150px; max-height: 220px; }
+  .hero-lyrics-list { gap: 9px; padding-block: clamp(62px, 9vh, 95px); }
+  .hero-lyric-list-line { font-size: clamp(14px, 3.8vw, 18px); line-height: 1.25; overflow-wrap: anywhere; }
+  .library-row, .library-row > span:nth-child(2) { min-width: 0; }
+  .library-row strong, .library-row small { overflow-wrap: anywhere; }
+}
+@media (max-width: 390px) {
+  .hero-copy-column .track-stamp { font-size: clamp(32px, 9.4vw, 48px); }
+  .hero-song-meta { padding: 9px 10px; }
+  .hero-song-meta p { font-size: clamp(16px, 4.8vw, 20px); }
+  .masthead { gap: 5px; padding-inline: 8px; }
+  .wordmark { font-size: 14px; letter-spacing: -1px; }
+  .mast-actions { gap: 3px; }
+  .quick-library-btn, .install-app-btn, .mast-queue-btn, .sign-button { width: 32px; min-width: 32px; height: 34px; min-height: 34px; }
+  .services-grid { grid-template-columns: minmax(0, 1fr); }
+  .services-backdrop { padding: 10px; }
+  .services-dialog { max-height: 94svh; padding: 14px; box-shadow: 6px 6px 0 var(--ink); }
+}
+@media (max-width: 360px) {
+  .wordmark { font-size: 13px; padding-inline: 4px; }
+  .quick-library-btn, .install-app-btn, .mast-queue-btn, .sign-button { width: 30px; min-width: 30px; }
+  .mast-actions { gap: 2px; }
+}
+
+/* Two-provider source strip and visible, policy-sized YouTube embed. */
+@media (min-width: 1051px) {
+  .hero-editorial-grid { grid-template-columns: minmax(250px, .82fr) minmax(220px, .72fr) minmax(360px, 1.16fr); }
+}
+.source-switcher { display: inline-flex; flex: 0 0 auto; overflow: hidden; background: var(--surface); border: 3px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); }
+.source-switcher button { min-height: 34px; padding: 0 8px; background: transparent; color: var(--on-surface); border: 0; font: 8px var(--mono); font-weight: 800; white-space: nowrap; }
+.source-switcher button + button { border-left: 2px solid var(--ink); }
+.source-switcher button.is-active { background: var(--accent); color: var(--on-accent); }
+.source-no-login { padding: 8px; background: var(--surface); color: var(--on-surface); border: 2px solid var(--ink); font: 8px var(--mono); font-weight: 800; white-space: nowrap; }
+.quick-library-btn:disabled, .library footer button:disabled, .upnext-pill-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+.youtube-source-card { position: relative; align-self: center; min-width: 200px; width: min(100%, 360px); padding: 10px; background: var(--surface); color: var(--on-surface); border: 4px solid var(--ink); box-shadow: 7px 7px 0 var(--ink); }
+.youtube-source-sticker { position: absolute; z-index: 2; top: -13px; left: 14px; display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; background: var(--accent); color: var(--on-accent); border: 2px solid var(--ink); font: 9px var(--mono); font-weight: 800; transform: rotate(-2deg); }
+.youtube-player-viewport { position: relative; width: 100%; min-width: 200px; min-height: 200px; aspect-ratio: 16 / 9; overflow: hidden; background: #111; border: 3px solid var(--ink); }
+.youtube-player-host, .youtube-player-host iframe { position: absolute; inset: 0; width: 100% !important; height: 100% !important; border: 0; }
+.youtube-idle-mark { position: absolute; inset: auto 8px 8px; width: max-content; max-width: calc(100% - 16px); padding: 6px 8px; background: var(--surface); color: var(--on-surface); border: 2px solid var(--ink); font: 8px var(--mono); font-weight: 800; pointer-events: none; }
+.youtube-video-error { margin: 9px 0 0; padding: 7px; background: var(--accent); color: var(--on-accent); border: 2px solid var(--ink); font: 9px var(--mono); font-weight: 800; line-height: 1.35; }
+.youtube-source-card > small { display: block; margin-top: 8px; font: 8px var(--mono); font-weight: 800; line-height: 1.4; }
+.search-box button { min-height: 36px; padding: 0 9px; background: var(--accent); color: var(--on-accent); border: 2px solid var(--ink); font: 9px var(--mono); font-weight: 800; }
+.youtube-quota-sticker { display: inline-block; margin: 0 0 8px; padding: 6px 8px; background: var(--surface); color: var(--on-surface); border: 2px solid var(--ink); box-shadow: 3px 3px 0 var(--ink); font: 8px var(--mono); font-weight: 800; }
+.youtube-quota-sticker.is-low { background: #ffd45e; color: #111; }
+@media (max-width: 1050px) {
+  .youtube-source-card { width: min(100%, 420px); }
+}
+@media (max-width: 760px) {
+  .masthead { height: auto; min-height: 64px; flex-wrap: wrap; padding-block: 7px; }
+  .mast-actions { width: 100%; margin-left: 0; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+  .youtube-source-card { width: min(100%, 390px); }
+  .hero-editorial-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 390px) {
+  .source-switcher button { min-height: 32px; padding-inline: 5px; font-size: 7px; }
+  .youtube-source-card { width: min(100%, 360px); }
 }

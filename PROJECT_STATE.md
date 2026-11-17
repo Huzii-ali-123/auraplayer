@@ -129,3 +129,29 @@ Run `npm test` for the contrast utility checks, the 20-color suite (including pu
 4. **Brutalist Error Boundary (`src/components/ErrorBoundary.tsx`):**
    - Top-level React error catcher preventing any unhandled exceptions from turning the viewport into a blank yellow canvas.
    - Renders a neo-brutalist crash screen featuring the exact error message, stack trace toggle, and a hard "RESET APPLICATION" button that wipes storage and restarts clean.
+
+---
+
+## 6. Provider Architecture and Current Integration Status
+
+- `src/providers/types.ts` defines provider IDs, capability names, and the adapter contract. `src/providers/spotify.ts` is the adapter for Spotify sign-in, search, and playlists; `src/providers/registry.ts` distinguishes implemented providers from future integrations.
+- `src/player/types.ts` defines the normalized `Track` shape and `src/player/source.ts` defines shared playback controls. `SpotifySource` wraps the existing SDK/API, and `src/youtube/source.ts` wraps one persistent official YouTube IFrame Player instance.
+- `src/components/ConnectedServices.tsx` is the provider status center. Spotify connect/disconnect uses the existing PKCE/auth and playback lifecycle. YouTube video search/playback needs a restricted Data API key and no user login. Apple Music and SoundCloud are not integrated; YouTube Music is unavailable as an account integration.
+- Spotify and YouTube videos are supported as separate sources, each with its own queue. YouTube uses an AuraPlayer-local queue because the Data API has no queue control. Cross-provider mixed queues are not enabled.
+- Apple Music’s official web SDK can search/play catalog and library content, but requires a developer token signed with an Apple private key. Keep token signing server-side; never place that private key in Vite environment variables.
+- SoundCloud offers an official API and OAuth 2.1 PKCE, but streaming is per-track availability dependent and refresh tokens are single-use. It requires app credentials and an adapter with secure token lifecycle handling.
+- Google’s official YouTube IFrame Player API works with public embedded videos; it is not a YouTube Music account/library connection. AuraPlayer does not use unofficial YouTube Music APIs.
+- `src/youtube/api.ts` searches only after explicit submission, caches results per query in memory and session storage, loads durations in one batched `videos.list` request, and tracks daily searches. The browser-side guard is 100 searches per UTC day with a low-quota notice beginning at 80. Google quota settings can differ by project and change over time; the Google Cloud Console is authoritative.
+- YouTube autoplay uses optional Last.fm similar-track/artist results, resolving at most five suggestions per fill. YouTube position is polled at 4 Hz only while playing and held outside React state. LRCLIB, scene resolution, and album-art palette extraction consume normalized tracks.
+- A deterministic CSS layer stack puts scene transitions below queue/library surfaces and the wheel; expanded player controls stay above both. The services center is the top modal layer. The zipper begins fully offscreen based on the full tab width, not just its narrow seam.
+- Mobile title, artist, playlist and lyric boxes now have explicit minimum-width, wrapping and font-size constraints; Playlists uses a library icon distinct from Play Order’s queue icon.
+
+### Current integration scope
+
+| Service | Status | Integration detail |
+| --- | --- | --- |
+| Spotify | Fully integrated | OAuth PKCE, Web Playback SDK, search, playlists, playback and queue; Premium required for web playback. |
+| Apple Music | Not integrated | Official MusicKit exists; needs Apple developer credentials and server-signed developer tokens. |
+| SoundCloud | Not integrated | Official API exists; needs app access and track-aware streaming/refresh handling. |
+| YouTube Music | Unavailable as an account integration | Official YouTube video embeds are distinct from YouTube Music. |
+| YouTube videos | Fully integrated | Official Data API v3 search and persistent visible IFrame Player; public videos, no YouTube account login, local queue, and Google quota/key restrictions apply. |

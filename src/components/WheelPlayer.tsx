@@ -15,7 +15,7 @@ import {
   SkipForward,
   Volume2
 } from 'lucide-react';
-import type { Track } from '../spotify/api';
+import type { Track, SourceId } from '../player/types';
 import type { Scene } from '../scenes/scenes';
 
 export type ProgressState = {
@@ -27,6 +27,7 @@ export type ProgressState = {
 
 type Props = {
   track: Track | null;
+  source: SourceId;
   scene: Scene;
   playing: boolean;
   progressRef: React.MutableRefObject<ProgressState>;
@@ -49,6 +50,7 @@ type Props = {
 
 function WheelPlayerView({
   track,
+  source,
   scene,
   playing,
   progressRef,
@@ -212,7 +214,7 @@ function WheelPlayerView({
     onSeek(angle / (Math.PI * 2));
   };
 
-  const art = track?.album?.images?.[0]?.url || '';
+  const art = track?.artworkUrl || '';
 
   return (
     <div
@@ -319,7 +321,7 @@ function WheelPlayerView({
         {/* Top Header */}
         <div className="panel-top">
           <span className="panel-badge">
-          {scene.label.toUpperCase()} • NOW PLAYING
+            {scene.label.toUpperCase()} • {source.toUpperCase()} SOURCE
           </span>
           <button aria-label="Close player panel" onClick={onClose}>
             ×
@@ -339,12 +341,8 @@ function WheelPlayerView({
 
         {/* Track Title & Artist */}
         <div className="panel-titles">
-          <strong>{track?.name || 'CHOOSE YOUR SOUND'}</strong>
-          <span>
-            {Array.isArray(track?.artists)
-              ? track.artists.map(a => a?.name || '').join(' / ') || 'CONNECT SPOTIFY TO BEGIN'
-              : 'CONNECT SPOTIFY TO BEGIN'}
-          </span>
+            <strong>{track?.title || 'CHOOSE YOUR SOUND'}</strong>
+          <span>{track?.artist || (source === 'spotify' ? 'CONNECT SPOTIFY TO BEGIN' : 'SEARCH YOUTUBE TO BEGIN')}</span>
         </div>
 
         {/* Timeline */}
@@ -371,6 +369,8 @@ function WheelPlayerView({
             className={shuffle ? 'is-active' : ''}
             onClick={onShuffle}
             aria-label="Toggle shuffle"
+            disabled={source !== 'spotify'}
+            title={source === 'youtube' ? 'Shuffle is not supported for YouTube videos' : 'Shuffle'}
           >
             <Shuffle size={14} />
           </button>
@@ -378,11 +378,12 @@ function WheelPlayerView({
             className={`repeat-mode-btn ${repeatMode !== 'off' ? 'is-active' : ''}`}
             onClick={onRepeat}
             aria-label={`Repeat ${repeatMode === 'off' ? 'off' : repeatMode === 'context' ? 'all' : 'one'}; activate to change mode`}
-            title={`Repeat ${repeatMode === 'off' ? 'off' : repeatMode === 'context' ? 'all' : 'one'}`}
+            title={source === 'youtube' ? 'Repeat is not supported for YouTube videos' : `Repeat ${repeatMode === 'off' ? 'off' : repeatMode === 'context' ? 'all' : 'one'}`}
+            disabled={source !== 'spotify'}
           >
             {repeatMode === 'context' ? <Repeat2 size={15} /> : repeatMode === 'track' ? <Repeat1 size={15} /> : <Repeat size={15} />}
           </button>
-          <span className="repeat-mode-label" aria-live="polite">{repeatMode === 'off' ? 'REPEAT OFF' : repeatMode === 'context' ? 'REPEAT ALL' : 'REPEAT ONE'}</span>
+          <span className="repeat-mode-label" aria-live="polite">{source !== 'spotify' ? 'REPEAT N/A' : repeatMode === 'off' ? 'REPEAT OFF' : repeatMode === 'context' ? 'REPEAT ALL' : 'REPEAT ONE'}</span>
         </div>
 
         {/* Volume */}

@@ -11,7 +11,7 @@ export type AlbumImage = {
   width?: number;
 };
 
-export type Track = {
+export type SpotifyTrack = {
   id: string;
   name: string;
   uri: string;
@@ -27,32 +27,17 @@ export type Track = {
 export type Playback = {
   is_playing: boolean;
   progress_ms: number;
-  item: Track | null;
+  item: SpotifyTrack | null;
   device?: { volume_percent: number };
   shuffle_state?: boolean;
   repeat_state?: 'off' | 'context' | 'track';
 };
 
-async function readPayload(response: Response, requestPath: string): Promise<unknown> {
-  const body = await response.text();
-  if (!body.trim()) return null;
-  try {
-    return JSON.parse(body);
-  } catch {
-    const endpoint = requestPath.split('?')[0];
-    if (
-      response.ok &&
-      // Successful player commands may return an empty body (204) or a
-      // non-JSON acknowledgement depending on the playback device/API edge.
-      // Their HTTP success status is the confirmation; don't reject the action
-      // just because the response isn't a JSON document.
-      /^\/me\/player\/(next|previous|pause|play|seek|shuffle|repeat|volume)$/.test(endpoint)
-    ) {
-      return null;
-    }
-    throw new Error(
-      `Spotify returned an unreadable response for ${endpoint} (HTTP ${response.status}).`
-    );
+export class SpotifyAccessLimitedError extends Error {
+  readonly status = 403;
+  constructor(readonly path: string, readonly responseBody: string, message?: string) {
+    super(message || 'Spotify access is limited to accounts allowlisted by this app’s owner.');
+    this.name = 'SpotifyAccessLimitedError';
   }
 }
 
@@ -105,18 +90,30 @@ export async function spotify<T>(
     return spotify<T>(path, init, true);
   }
 
-  const payload = (await readPayload(res, path)) as { error?: { message?: string } } | T | null;
+  const endpoint = path.split('?')[0];
+  const responseBody = await res.text();
+  let payload: { error?: { message?: string } } | T | null = null;
+  if (responseBody.trim()) {
+    try { payload = JSON.parse(responseBody) as { error?: { message?: string } } | T; }
+    catch {
+      if (res.status === 403) {
+        console.error('[AuraPlayer] Spotify API returned HTTP 403', { path: endpoint, status: res.status, body: responseBody });
+        throw new SpotifyAccessLimitedError(endpoint, responseBody);
+      }
+      if (!(res.ok && /^\/me\/player\/(next|previous|pause|play|seek|shuffle|repeat|volume)$/.test(endpoint))) {
+        throw new Error(`Spotify returned an unreadable response for ${endpoint} (HTTP ${res.status}).`);
+      }
+    }
+  }
 
   // Handle 403 Forbidden: developer app whitelist restriction or missing Premium
   if (res.status === 403) {
+    console.error('[AuraPlayer] Spotify API returned HTTP 403', { path: endpoint, status: res.status, body: responseBody });
     const errorMsg = (payload as { error?: { message?: string } } | null)?.error?.message;
     if (errorMsg && /premium/i.test(errorMsg)) {
       throw new Error('Spotify Premium is required for browser playback.');
     }
-    throw new Error(
-      errorMsg ||
-      'Your account is not added to this Spotify app. Add your email under User Management in the Spotify Developer Dashboard.'
-    );
+    throw new SpotifyAccessLimitedError(endpoint, responseBody, errorMsg);
   }
 
   if (!res.ok) {

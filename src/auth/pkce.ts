@@ -21,7 +21,13 @@ export type AuthData = {
   expires_at: number;
 };
 
-type CallbackResult = { success: boolean; error?: string };
+export type CallbackResult = { success: boolean; error?: string; statusCode?: number; responseBody?: string };
+export class SpotifyAuthHttpError extends Error {
+  constructor(readonly statusCode: number, readonly responseBody: string, message: string) {
+    super(message);
+    this.name = 'SpotifyAuthHttpError';
+  }
+}
 type TokenResponse = {
   access_token?: string;
   refresh_token?: string;
@@ -56,12 +62,12 @@ function clearPendingAuth() {
   removeStoredValue(REDIRECT_KEY);
 }
 
-async function tokenResponse(response: Response): Promise<TokenResponse> {
+async function tokenResponse(response: Response): Promise<{ data: TokenResponse; body: string }> {
   const body = await response.text();
   try {
-    return JSON.parse(body) as TokenResponse;
+    return { data: JSON.parse(body) as TokenResponse, body };
   } catch {
-    throw new Error('Spotify returned an invalid token response. Please try again.');
+    return { data: { error_description: 'Spotify returned an invalid token response.' }, body };
   }
 }
 
@@ -213,12 +219,17 @@ export function handleCallback(): Promise<CallbackResult> {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString()
       });
-      const data = await tokenResponse(response);
+      const { data, body: responseBody } = await tokenResponse(response);
       if (!response.ok || !data.access_token || !data.expires_in) {
+        if (response.status === 403) {
+          console.error('[AuraPlayer] Spotify token exchange returned HTTP 403', { status: response.status, body: responseBody });
+        }
         clearPendingAuth();
         return {
           success: false,
-          error: data.error_description || data.error || `Spotify sign-in failed (HTTP ${response.status}).`
+          error: data.error_description || data.error || `Spotify sign-in failed (HTTP ${response.status}).`,
+          statusCode: response.status,
+          responseBody
         };
       }
 
@@ -264,7 +275,12 @@ export async function refreshToken(): Promise<string | null> {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString()
       });
-      const data = await tokenResponse(response);
+      const { data, body: responseBody } = await tokenResponse(response);
+      if (response.status === 403) {
+        console.error('[AuraPlayer] Spotify token refresh returned HTTP 403', { status: response.status, body: responseBody });
+        logout();
+        throw new SpotifyAuthHttpError(403, responseBody, data.error_description || data.error || 'Spotify access is limited to allowlisted accounts.');
+      }
       if (!response.ok || !data.access_token || !data.expires_in) {
         logout();
         return null;
@@ -276,8 +292,9 @@ export async function refreshToken(): Promise<string | null> {
       };
       save(updated);
       return updated.access_token;
-    } catch {
+    } catch (error) {
       logout();
+      if (error instanceof SpotifyAuthHttpError) throw error;
       return null;
     } finally {
       refreshPromise = null;

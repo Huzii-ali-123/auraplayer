@@ -1,4 +1,4 @@
-import type { Track } from '../spotify/api';
+import type { Track } from '../player/types';
 import { buildPalette } from '../color/palette';
 import type { Palette } from '../color/palette';
 import { songMap, songPaletteMap } from './songMap';
@@ -183,7 +183,7 @@ export function hashTrackId(id: string = ''): number {
 }
 
 function forTrack(scene: Scene, track: Track, dominant?: [string, string, string]): Scene {
-  const trackId = track?.id || 'default_track_id';
+  const trackId = track ? `${track.source}:${track.id}` : 'default_track_id';
   const hash = hashTrackId(trackId);
   const variantIndex = hash % 4;
   const palette = buildPalette(dominant, {
@@ -191,7 +191,7 @@ function forTrack(scene: Scene, track: Track, dominant?: [string, string, string
     surface: scene.colors[1],
     accent: scene.colors[2],
     accent2: scene.colors[3]
-  }, songPaletteMap[trackId]);
+  }, songPaletteMap[track.source === 'youtube' ? `youtube:${track.id}` : track.id]);
 
   return {
     ...scene,
@@ -214,10 +214,11 @@ export function resolveScene(
   if (!track) return byKey('stars')!;
 
   const trackId = track.id || '';
+  const curatedKey = track.source === 'youtube' ? `youtube:${trackId}` : trackId;
 
   // 1. Curated map
   if (trackId) {
-    const mapped = songMap[trackId];
+    const mapped = songMap[curatedKey];
     if (mapped && byKey(mapped)) {
       return forTrack(byKey(mapped)!, track, dominant);
     }
@@ -234,11 +235,9 @@ export function resolveScene(
   }
 
   // 3. Title, album, artist keywords (Safe optional chaining)
-  const trackName = track.name || '';
-  const albumName = track.album?.name || '';
-  const artistNames = Array.isArray(track.artists)
-    ? track.artists.map(a => a?.name || '').join(' ')
-    : '';
+  const trackName = track.title || '';
+  const albumName = track.album || '';
+  const artistNames = track.artist || '';
   const text = `${trackName} ${albumName} ${artistNames}`.toLowerCase();
 
   for (const scene of scenes) {
